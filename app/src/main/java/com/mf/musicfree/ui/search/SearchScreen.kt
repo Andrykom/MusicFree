@@ -1,0 +1,379 @@
+package com.mf.musicfree.ui.search
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SentimentDissatisfied
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.mf.musicfree.player.PlayerViewModel
+import com.mf.musicfree.plugin.PluginManager
+import com.mf.musicfree.plugin.SearchTrack
+import com.mf.musicfree.ui.components.AddToPlaylistDialog
+import com.mf.musicfree.ui.components.TrackCover
+import kotlinx.coroutines.launch
+import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.koinInject
+
+@Composable
+fun SearchScreen(
+    playerViewModel: PlayerViewModel,
+    onNavigate: (String) -> Unit,
+    viewModel: SearchViewModel = koinViewModel(),
+    pluginManager: PluginManager = koinInject()
+) {
+    val query by viewModel.query.collectAsState()
+    val results by viewModel.results.collectAsState()
+    val isSearching by viewModel.isSearching.collectAsState()
+    val uiState by viewModel.uiState.collectAsState()
+    val downloadedIds by viewModel.downloadedIds.collectAsState()
+    val selectedPlugin by viewModel.selectedPlugin.collectAsState()
+    val currentTrack by playerViewModel.currentTrack.collectAsState()
+    val isPlaying by playerViewModel.isPlaying.collectAsState()
+
+    val plugins = remember { pluginManager.plugins }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
+
+    var trackIdToAdd by remember { mutableStateOf<String?>(null) }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { padding ->
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+        ) {
+            // ← Поисковой бар — первый item, уходит при скролле естественно
+            item {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { viewModel.onQueryChange(it) },
+                    placeholder = { Text("Поиск треков...") },
+                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        imeAction = androidx.compose.ui.text.input.ImeAction.Search
+                    ),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                        onSearch = { viewModel.search() }
+                    )
+                )
+
+                Button(
+                    onClick = { viewModel.search() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    enabled = !isSearching && query.isNotBlank()
+                ) {
+                    if (isSearching) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    Text("Искать")
+                }
+
+                if (plugins.isNotEmpty()) {
+                    LazyRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(plugins) { plugin ->
+                            val selected = selectedPlugin?.name == plugin.name
+                            FilterChip(
+                                selected = selected,
+                                onClick = {
+                                    viewModel.selectPlugin(if (selected) null else plugin)
+                                },
+                                label = { Text(plugin.name) },
+                                leadingIcon = if (selected) {
+                                    {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                } else null
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ── Контент ──
+            when (val state = uiState) {
+                is SearchUiState.Idle -> {
+                    item {
+                        Box(
+                            modifier = Modifier.fillParentMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Search,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(64.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                )
+                                Text(
+                                    text = "Введите запрос и нажмите «Искать»",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                }
+
+                is SearchUiState.Loading -> {
+                    item {
+                        Box(
+                            modifier = Modifier.fillParentMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator()
+                        }
+                    }
+                }
+
+                is SearchUiState.Empty -> {
+                    item {
+                        Box(
+                            modifier = Modifier.fillParentMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                                modifier = Modifier.padding(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.SentimentDissatisfied,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(64.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                )
+                                Text(
+                                    text = state.message,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                            }
+                        }
+                    }
+                }
+
+                is SearchUiState.Error -> {
+                    item {
+                        Box(
+                            modifier = Modifier.fillParentMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier = Modifier.padding(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CloudOff,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(64.dp),
+                                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                                )
+                                Text(
+                                    text = state.message,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    textAlign = TextAlign.Center,
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                if (state.canRetry) {
+                                    Button(onClick = { viewModel.retry() }) {
+                                        Icon(
+                                            imageVector = Icons.Default.Refresh,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Повторить")
+                                    }
+                                }
+                                TextButton(onClick = { viewModel.clearError() }) {
+                                    Text("Закрыть")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                is SearchUiState.Success -> {
+                    itemsIndexed(results, key = { _, item -> item.id }) { index, track ->
+                        val isCurrent = track.id == currentTrack?.id
+                        val isPaused = isCurrent && !isPlaying
+
+                        SearchResultItem(
+                            track = track,
+                            isDownloaded = track.id in downloadedIds,
+                            isCurrent = isCurrent,
+                            isPaused = isPaused,
+                            onClick = {
+                                if (isCurrent) {
+                                    playerViewModel.togglePlayPause()
+                                } else {
+                                    playerViewModel.playSearchResults(results, index)
+                                }
+                            },
+                            onDownload = {
+                                viewModel.downloadTrack(track)
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        "\"${track.title}\" добавлен в библиотеку",
+                                        duration = SnackbarDuration.Short
+                                    )
+                                }
+                            },
+                            onAddToPlaylist = { trackIdToAdd = track.id }
+                        )
+                        if (index < results.lastIndex) {
+                            HorizontalDivider(
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                                thickness = 0.5.dp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    trackIdToAdd?.let { id ->
+        AddToPlaylistDialog(
+            trackId = id,
+            onDismiss = { trackIdToAdd = null }
+        )
+    }
+}
+
+@Composable
+fun SearchResultItem(
+    track: SearchTrack,
+    isDownloaded: Boolean,
+    isCurrent: Boolean,
+    isPaused: Boolean,
+    onClick: () -> Unit,
+    onDownload: () -> Unit,
+    onAddToPlaylist: () -> Unit
+) {
+    val bgColor = if (isCurrent) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(64.dp)
+            .background(bgColor)
+            .clickable { onClick() }
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        TrackCover(
+            coverUrl = track.coverUrl,
+            title = track.title,
+            modifier = Modifier.size(48.dp)
+        )
+
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = track.title,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = track.artist,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isCurrent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+                track.quality?.let {
+                    Text(
+                        text = "• $it",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        maxLines = 1
+                    )
+                }
+                track.durationText?.let {
+                    Text(
+                        text = "• $it",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
+
+        if (isCurrent) {
+            Icon(
+                imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp)
+            )
+        }
+
+        if (!isDownloaded) {
+            IconButton(onClick = onDownload) {
+                Icon(Icons.Default.Download, "Download")
+            }
+        }
+
+        IconButton(onClick = onAddToPlaylist) {
+            Icon(Icons.Default.Add, "В плейлист")
+        }
+    }
+}

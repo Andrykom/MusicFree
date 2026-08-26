@@ -1,0 +1,15 @@
+package com.mf.musicfree.data.repository
+
+import com.mf.musicfree.data.db.dao.TrackDao
+import com.mf.musicfree.data.model.Track
+import kotlinx.coroutines.flow.Flow
+
+class TrackRepository(private val trackDao: TrackDao) {
+    fun getAllTracks(): Flow<List<Track>> = trackDao.getAll()
+    fun getDownloadedTracks(): Flow<List<Track>> = trackDao.getDownloaded()
+    suspend fun addTrack(track: Track) = trackDao.insert(track)
+    suspend fun deleteTrack(track: Track) = trackDao.delete(track)
+    suspend fun updateFilePath(id: String, path: String) = trackDao.updateFilePath(id, path)
+
+    suspend fun exists(id: String): Boolean = trackDao.exists(id)
+}
