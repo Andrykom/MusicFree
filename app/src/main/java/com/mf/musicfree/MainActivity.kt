@@ -1,7 +1,6 @@
 package com.mf.musicfree
 
 import android.Manifest
-import android.app.ActivityManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -31,14 +30,13 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Запускаем сервис только если он ещё не запущен
-        if (!isServiceRunning(PlaybackService::class.java.name)) {
-            val intent = Intent(this, PlaybackService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(intent)
-            } else {
-                startService(intent)
-            }
+        // Запускаем сервис. Повторный старт безопасен: у работающего сервиса
+        // просто вызовется onStartCommand
+        val serviceIntent = Intent(this, PlaybackService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
         }
 
         enableEdgeToEdge()
@@ -46,13 +44,6 @@ class MainActivity : ComponentActivity() {
             MusicFreeTheme {
                 MainScreen()
             }
-        }
-    }
-
-    private fun isServiceRunning(serviceClassName: String): Boolean {
-        val manager = getSystemService(ACTIVITY_SERVICE) as ActivityManager
-        return manager.getRunningServices(Int.MAX_VALUE).any {
-            it.service.className == serviceClassName
         }
     }
 }

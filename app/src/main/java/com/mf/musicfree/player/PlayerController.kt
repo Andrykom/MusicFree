@@ -27,7 +27,16 @@ class PlayerController(private val context: Context) {
 
     private fun ensureInitialized() {
         if (!::exoPlayer.isInitialized) {
-            exoPlayer = ExoPlayer.Builder(context).build()
+            exoPlayer = ExoPlayer.Builder(context)
+                .setAudioAttributes(
+                    androidx.media3.common.AudioAttributes.Builder()
+                        .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                        .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC)
+                        .build(),
+                    /* handleAudioFocus = */ true
+                )
+                .setHandleAudioBecomingNoisy(true)
+                .build()
             init(exoPlayer)
         }
     }

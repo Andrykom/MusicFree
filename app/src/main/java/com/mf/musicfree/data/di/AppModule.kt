@@ -40,6 +40,9 @@ val appModule = module {
             AppDatabase::class.java,
             "mf_database"
         )
+            .addMigrations(AppDatabase.MIGRATION_2_3)
+            // Fallback оставлен для установок с v1 — их схему не восстановить.
+            // Для всех новых изменений схемы писать миграции!
             .fallbackToDestructiveMigration()
             .build()
     }

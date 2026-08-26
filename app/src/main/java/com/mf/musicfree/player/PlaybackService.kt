@@ -57,7 +57,16 @@ class PlaybackService : MediaSessionService() {
         super.onCreate()
 
         val playerController: PlayerController by inject()
-        val player = ExoPlayer.Builder(this).build()
+        val player = ExoPlayer.Builder(this)
+            .setAudioAttributes(
+                androidx.media3.common.AudioAttributes.Builder()
+                    .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                    .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .build(),
+                /* handleAudioFocus = */ true
+            )
+            .setHandleAudioBecomingNoisy(true)
+            .build()
         playerController.init(player)
 
         mediaSession = MediaSession.Builder(this, player).build()

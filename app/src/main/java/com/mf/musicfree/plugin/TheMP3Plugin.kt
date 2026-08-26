@@ -80,11 +80,8 @@ class TheMP3Plugin(
             Log.w("TheMP3Plugin", "POST failed: ${e.message}")
         }
 
-        if (lastException != null) {
-            throw lastException
-        }
-
-        emptyList()
+        // Сюда доходим, только если все три стратегии кинули исключение
+        throw lastException!!
     }
 
     private suspend fun enrichWithCovers(tracks: List<SearchTrack>): List<SearchTrack> {

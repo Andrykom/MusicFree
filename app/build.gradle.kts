@@ -41,6 +41,11 @@ android {
     }
 }
 
+ksp {
+    // Экспорт схем Room в app/schemas — нужен для написания миграций
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
