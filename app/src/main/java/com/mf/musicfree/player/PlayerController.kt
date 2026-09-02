@@ -12,6 +12,7 @@ class PlayerController(private val context: Context) {
     private lateinit var exoPlayer: ExoPlayer
     private var onTrackChange: ((Int) -> Unit)? = null
     private var onIsPlayingChange: ((Boolean) -> Unit)? = null
+    private var trackQueue: List<Track> = emptyList()
 
     fun init(player: ExoPlayer) {
         exoPlayer = player
@@ -23,7 +24,22 @@ class PlayerController(private val context: Context) {
                 onIsPlayingChange?.invoke(isPlaying)
             }
         })
+        // Если ViewModel уже подписалась до создания плеера (пересоздание Activity),
+        // сразу прокидываем текущее состояние
+        if (onTrackChange != null && trackQueue.isNotEmpty()) {
+            onTrackChange?.invoke(exoPlayer.currentMediaItemIndex)
+        }
+        if (onIsPlayingChange != null) {
+            onIsPlayingChange?.invoke(exoPlayer.isPlaying)
+        }
     }
+
+    fun isInitialized(): Boolean = ::exoPlayer.isInitialized
+
+    fun getQueue(): List<Track> = trackQueue
+
+    fun getCurrentIndex(): Int =
+        if (::exoPlayer.isInitialized) exoPlayer.currentMediaItemIndex else -1
 
     private fun ensureInitialized() {
         if (!::exoPlayer.isInitialized) {
@@ -48,6 +64,7 @@ class PlayerController(private val context: Context) {
     }
 
     fun setQueue(tracks: List<Track>, startIndex: Int = 0) {
+        trackQueue = tracks
         ensureInitialized()
         val mediaItems = tracks.map { track ->
             val url = track.filePath ?: track.sourceUrl ?: ""
@@ -111,6 +128,8 @@ class PlayerController(private val context: Context) {
     fun insertAfterCurrent(tracks: List<Track>) {
         ensureInitialized()
         val currentIndex = exoPlayer.currentMediaItemIndex.coerceAtLeast(0)
+        // Синхронизируем внутренний список треков с ExoPlayer
+        trackQueue = trackQueue.toMutableList().apply { addAll(currentIndex + 1, tracks) }
         val mediaItems = tracks.map { track ->
             val url = track.filePath ?: track.sourceUrl ?: ""
             val coverUrl = track.coverUrl?.upscaleCover()
@@ -129,5 +148,13 @@ class PlayerController(private val context: Context) {
                 .build()
         }
         exoPlayer.addMediaItems(currentIndex + 1, mediaItems)
+    }
+
+    fun removeAt(index: Int) {
+        if (index !in trackQueue.indices) return
+        trackQueue = trackQueue.toMutableList().apply { removeAt(index) }
+        if (::exoPlayer.isInitialized && index < exoPlayer.mediaItemCount) {
+            exoPlayer.removeMediaItem(index)
+        }
     }
 }

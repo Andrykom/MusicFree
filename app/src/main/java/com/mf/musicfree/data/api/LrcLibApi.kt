@@ -4,6 +4,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
+import com.mf.musicfree.util.isNetworkError
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -34,6 +35,7 @@ class LrcLibApi(private val client: HttpClient) {
                 duration?.let { parameter("duration", it) }
             }.body()
         } catch (e: Exception) {
+            if (e.isNetworkError()) throw e
             null
         }
     }

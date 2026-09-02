@@ -1,6 +1,7 @@
 package com.mf.musicfree.ui.player
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
@@ -11,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mf.musicfree.player.PlayerViewModel
@@ -34,6 +36,16 @@ fun MiniPlayer(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 4.dp)
+            .pointerInput(Unit) {
+                var drag = 0f
+                detectVerticalDragGestures(
+                    onDragEnd = {
+                        if (drag < -80) onExpand()
+                        drag = 0f
+                    },
+                    onVerticalDrag = { _, amount -> drag += amount }
+                )
+            }
             .clickable { onExpand() },
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant

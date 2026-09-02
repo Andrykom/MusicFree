@@ -63,6 +63,8 @@ private fun TracksTab(
     val tracks by viewModel.tracks.collectAsState()
     val currentTrack by playerViewModel.currentTrack.collectAsState()
     val isPlaying by playerViewModel.isPlaying.collectAsState()
+    val downloadProgress by viewModel.downloadProgress.collectAsState()
+    val downloadFailed by viewModel.downloadFailed.collectAsState()
     var trackIdToAdd by remember { mutableStateOf<String?>(null) }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -83,11 +85,17 @@ private fun TracksTab(
                 itemsIndexed(tracks, key = { _, item -> item.id }) { index, track ->
                     val isCurrent = track.id == currentTrack?.id
                     val isPaused = isCurrent && !isPlaying
+                    val progress = downloadProgress[track.id]
+                    val isFailed = track.id in downloadFailed
+                    val isDownloading = progress != null && !track.isDownloaded
 
                     TrackItem(
                         track = track,
                         isCurrent = isCurrent,
                         isPaused = isPaused,
+                        downloadProgress = progress,
+                        isFailed = isFailed,
+                        isDownloading = isDownloading,
                         onClick = {
                             if (isCurrent) {
                                 playerViewModel.togglePlayPause()
@@ -96,7 +104,8 @@ private fun TracksTab(
                             }
                         },
                         onDelete = { viewModel.deleteTrack(track) },
-                        onAddToPlaylist = { trackIdToAdd = track.id }
+                        onAddToPlaylist = { trackIdToAdd = track.id },
+                        onRetry = { viewModel.retryDownload(track) }
                     )
                     if (index < tracks.lastIndex) {
                         HorizontalDivider(
@@ -311,9 +320,13 @@ fun TrackItem(
     track: Track,
     isCurrent: Boolean,
     isPaused: Boolean,
+    downloadProgress: Int? = null,
+    isFailed: Boolean = false,
+    isDownloading: Boolean = false,
     onClick: () -> Unit,
     onDelete: () -> Unit,
-    onAddToPlaylist: () -> Unit
+    onAddToPlaylist: () -> Unit,
+    onRetry: () -> Unit = {}
 ) {
     val bgColor = if (isCurrent) {
         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
@@ -321,56 +334,89 @@ fun TrackItem(
         MaterialTheme.colorScheme.surface
     }
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(64.dp)
-            .background(bgColor)
-            .clickable { onClick() }
-            .padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        TrackCover(
-            coverUrl = track.coverUrl,
-            title = track.title,
-            modifier = Modifier.size(48.dp)
-        )
-
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.Center
+    Column(modifier = Modifier.fillMaxWidth().background(bgColor)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp)
+                .clickable { onClick() }
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(
-                text = track.title,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+            TrackCover(
+                coverUrl = track.coverUrl,
+                title = track.title,
+                modifier = Modifier.size(48.dp)
             )
-            Text(
-                text = track.artist,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (isCurrent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1
-            )
-        }
 
-        if (isCurrent) {
-            Icon(
-                imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(24.dp)
-            )
-        }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = track.title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = track.artist,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isCurrent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
 
-        IconButton(onClick = onDelete) {
-            Icon(Icons.Default.Delete, "Delete")
-        }
+            if (isCurrent) {
+                Icon(
+                    imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
 
-        IconButton(onClick = onAddToPlaylist) {
-            Icon(Icons.Default.Add, "В плейлист")
+            when {
+                isDownloading -> {
+                    if (downloadProgress != null && downloadProgress >= 0) {
+                        Text(
+                            "${downloadProgress}%",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp
+                    )
+                }
+                isFailed -> {
+                    IconButton(onClick = onRetry) {
+                        Icon(Icons.Default.MusicNote, "Повторить", tint = MaterialTheme.colorScheme.error)
+                    }
+                }
+                else -> {
+                    IconButton(onClick = onDelete) {
+                        Icon(Icons.Default.Delete, "Delete")
+                    }
+                }
+            }
+
+            IconButton(onClick = onAddToPlaylist) {
+                Icon(Icons.Default.Add, "В плейлист")
+            }
+        }
+        if (isDownloading) {
+            if (downloadProgress != null && downloadProgress >= 0) {
+                LinearProgressIndicator(
+                    progress = { downloadProgress / 100f },
+                    modifier = Modifier.fillMaxWidth().height(2.dp)
+                )
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(2.dp))
+            }
         }
     }
 }

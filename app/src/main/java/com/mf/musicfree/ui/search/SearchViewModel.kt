@@ -156,9 +156,11 @@ class SearchViewModel(
 
                 val downloadWork = OneTimeWorkRequestBuilder<TrackDownloadWorker>()
                     .setInputData(inputData)
+                    .addTag("track_download")
+                    .addTag(searchTrack.id)
                     .build()
 
-                workManager.enqueue(downloadWork)
+                workManager.enqueueUniqueWork(searchTrack.id, androidx.work.ExistingWorkPolicy.KEEP, downloadWork)
                 _downloadedIds.value = _downloadedIds.value + searchTrack.id
             } catch (e: Exception) {
                 _error.value = "Не удалось добавить трек: ${e.message}"

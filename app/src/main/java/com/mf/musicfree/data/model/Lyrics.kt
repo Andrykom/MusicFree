@@ -1,5 +1,8 @@
 package com.mf.musicfree.data.model
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 data class LyricsLine(
     val timeMs: Long,
     val text: String

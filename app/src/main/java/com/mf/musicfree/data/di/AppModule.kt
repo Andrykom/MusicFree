@@ -15,6 +15,7 @@ import com.mf.musicfree.data.repository.LyricsRepository
 import com.mf.musicfree.data.repository.PlaylistRepository
 import com.mf.musicfree.data.repository.RadioRepository
 import com.mf.musicfree.data.repository.TrackRepository
+import com.mf.musicfree.data.preferences.BlockedArtistsRepository
 import com.mf.musicfree.player.PlayerController
 import com.mf.musicfree.player.PlayerViewModel
 import com.mf.musicfree.ui.library.PlaylistDetailViewModel
@@ -40,7 +41,7 @@ val appModule = module {
             AppDatabase::class.java,
             "mf_database"
         )
-            .addMigrations(AppDatabase.MIGRATION_2_3)
+            .addMigrations(AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
             // Fallback оставлен для установок с v1 — их схему не восстановить.
             // Для всех новых изменений схемы писать миграции!
             .fallbackToDestructiveMigration()
@@ -48,10 +49,12 @@ val appModule = module {
     }
     single { get<AppDatabase>().trackDao() }
     single { get<AppDatabase>().playlistDao() }
+    single { get<AppDatabase>().lyricsDao() }
     single { TrackRepository(get()) }
     single { PlaylistRepository(get()) }
     single { PlayerController(androidContext()) }
     single { WorkManager.getInstance(androidContext()) }
+    single { BlockedArtistsRepository(androidContext()) }
 
     // Ktor HTTP client (теперь используется для LrcLib, Netease и Genius)
     single {
@@ -79,7 +82,7 @@ val appModule = module {
 
 
     // Репозиторий текстов (цепочка: Netease -> LrcLib -> Kugou -> Genius)
-    single { LyricsRepository(get(), get(), get(), get()) }
+    single { LyricsRepository(get(), get(), get(), get(), get()) }
 
     single {
         PluginManager().apply {
@@ -89,11 +92,11 @@ val appModule = module {
         }
     }
 
-    single { RadioRepository(get(), get()) } // DeezerRadioApi, PluginManager
+    single { RadioRepository(get(), get(), get()) } // DeezerRadioApi, PluginManager, BlockedArtists
 
-    viewModel { PlayerViewModel(get(), get(), get(), get(), get(), get()) }
+    viewModel { PlayerViewModel(get(), get(), get(), get(), get(), get(), get()) }
     viewModel { SearchViewModel(get(), get(), get()) }
-    viewModel { LibraryViewModel(get(), get()) }
+    viewModel { LibraryViewModel(get(), get(), get()) }
     viewModel { (playlistId: String) ->
         PlaylistDetailViewModel(playlistId, get())
     }

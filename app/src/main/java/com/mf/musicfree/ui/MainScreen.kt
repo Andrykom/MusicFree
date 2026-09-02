@@ -1,6 +1,9 @@
 package com.mf.musicfree.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -19,20 +22,24 @@ import com.mf.musicfree.ui.player.LyricsScreen
 import com.mf.musicfree.ui.player.MiniPlayer
 import com.mf.musicfree.ui.search.SearchScreen
 import com.mf.musicfree.ui.settings.SettingsScreen
+import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MainScreen() {
     val navController = rememberNavController()
     val playerViewModel = koinViewModel<PlayerViewModel>()
     val items = listOf(BottomNavItem.Library, BottomNavItem.Search, BottomNavItem.Settings)
 
+    val pagerState = rememberPagerState(pageCount = { items.size })
+    val scope = rememberCoroutineScope()
+
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
-    val hideBottomBarRoutes = setOf("player", "lyrics")
-    val showBottomBar = currentRoute != null
-            && currentRoute !in hideBottomBarRoutes
-            && !currentRoute.startsWith("playlist_detail")
+    // На вкладках — показываем pager ("pager"), на остальных — нет
+    val isOnPager = currentRoute == "pager"
+    val showBottomBar = currentRoute == "pager"
 
     Scaffold(
         bottomBar = {
@@ -43,16 +50,19 @@ fun MainScreen() {
                         onExpand = { navController.navigate("player") }
                     )
                     NavigationBar {
-                        items.forEach { item ->
+                        items.forEachIndexed { index, item ->
                             NavigationBarItem(
                                 icon = { Icon(item.icon, contentDescription = item.title) },
                                 label = { Text(item.title) },
-                                selected = currentRoute == item.route,
+                                selected = pagerState.currentPage == index,
                                 onClick = {
-                                    navController.navigate(item.route) {
-                                        popUpTo(navController.graph.startDestinationId) { saveState = true }
-                                        launchSingleTop = true
-                                        restoreState = true
+                                    if (isOnPager) {
+                                        scope.launch { pagerState.animateScrollToPage(index) }
+                                    } else {
+                                        navController.navigate("pager") {
+                                            popUpTo("pager") { inclusive = false }
+                                        }
+                                        scope.launch { pagerState.animateScrollToPage(index) }
                                     }
                                 }
                             )
@@ -64,22 +74,27 @@ fun MainScreen() {
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = BottomNavItem.Library.route,
+            startDestination = "pager",
             modifier = Modifier.padding(innerPadding)
         ) {
-            composable(BottomNavItem.Library.route) {
-                LibraryScreen(
-                    playerViewModel = playerViewModel,
-                    onNavigate = { navController.navigate(it) }
-                )
+            composable("pager") {
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize()
+                ) { page ->
+                    when (page) {
+                        0 -> LibraryScreen(
+                            playerViewModel = playerViewModel,
+                            onNavigate = { navController.navigate(it) }
+                        )
+                        1 -> SearchScreen(
+                            playerViewModel = playerViewModel,
+                            onNavigate = { navController.navigate(it) }
+                        )
+                        2 -> SettingsScreen()
+                    }
+                }
             }
-            composable(BottomNavItem.Search.route) {
-                SearchScreen(
-                    playerViewModel = playerViewModel,
-                    onNavigate = { navController.navigate(it) }
-                )
-            }
-            composable(BottomNavItem.Settings.route) { SettingsScreen() }
             composable("player") {
                 FullPlayerScreen(
                     viewModel = playerViewModel,

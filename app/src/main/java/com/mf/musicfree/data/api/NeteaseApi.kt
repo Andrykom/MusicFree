@@ -5,6 +5,7 @@ import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.parameter
+import com.mf.musicfree.util.isNetworkError
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -51,6 +52,7 @@ class NeteaseApi(private val client: HttpClient) {
 
             lyricResponse.lrc?.lyric?.takeIf { it.isNotBlank() }
         } catch (e: Exception) {
+            if (e.isNetworkError()) throw e
             null
         }
     }

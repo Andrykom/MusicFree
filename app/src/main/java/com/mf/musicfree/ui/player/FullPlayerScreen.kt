@@ -1,10 +1,12 @@
 package com.mf.musicfree.ui.player
 
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome // <-- Новая иконка волны/магии
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Pause
@@ -19,6 +21,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.mf.musicfree.player.PlayerViewModel
@@ -45,6 +48,7 @@ fun FullPlayerScreen(
 
     // Подписываемся на стейт радио
     val isRadioMode by viewModel.isRadioMode.collectAsState()
+    val isArtistBlocked by viewModel.isCurrentArtistBlocked.collectAsState()
 
     var showAddToPlaylist by remember { mutableStateOf(false) }
 
@@ -69,7 +73,17 @@ fun FullPlayerScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(24.dp),
+                .padding(24.dp)
+                .pointerInput(Unit) {
+                    var drag = 0f
+                    detectVerticalDragGestures(
+                        onDragEnd = {
+                            if (drag > 120) onBack()
+                            drag = 0f
+                        },
+                        onVerticalDrag = { _, amount -> drag += amount }
+                    )
+                },
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceEvenly
         ) {
@@ -179,6 +193,15 @@ fun FullPlayerScreen(
                         imageVector = Icons.Default.AutoAwesome,
                         contentDescription = "Моя Волна",
                         tint = if (isRadioMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+
+                IconButton(onClick = { viewModel.toggleBlockCurrentArtist() }) {
+                    Icon(
+                        imageVector = Icons.Default.Block,
+                        contentDescription = if (isArtistBlocked) "Разблокировать" else "Заблокировать артиста",
+                        tint = if (isArtistBlocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(28.dp)
                     )
                 }

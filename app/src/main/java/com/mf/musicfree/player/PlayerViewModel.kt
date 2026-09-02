@@ -14,11 +14,16 @@ import com.mf.musicfree.data.repository.LyricsRepository
 import com.mf.musicfree.data.repository.PlaylistRepository
 import com.mf.musicfree.data.repository.RadioRepository
 import com.mf.musicfree.data.repository.TrackRepository
+import com.mf.musicfree.data.preferences.BlockedArtistsRepository
 import com.mf.musicfree.plugin.SearchTrack
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -30,7 +35,8 @@ class PlayerViewModel(
     private val workManager: WorkManager,
     private val playlistRepository: PlaylistRepository,
     private val lyricsRepository: LyricsRepository,
-    private val radioRepository: RadioRepository
+    private val radioRepository: RadioRepository,
+    private val blockedArtistsRepository: BlockedArtistsRepository
 ) : ViewModel() {
 
     private val _queue = MutableStateFlow<List<Track>>(emptyList())
@@ -69,8 +75,28 @@ class PlayerViewModel(
     private val _isLyricsLoading = MutableStateFlow(false)
     val isLyricsLoading: StateFlow<Boolean> = _isLyricsLoading
 
+    sealed class LyricsUiState {
+        data object Idle : LyricsUiState()
+        data object Loading : LyricsUiState()
+        data class Success(val lyrics: TrackLyrics) : LyricsUiState()
+        data object Empty : LyricsUiState()
+        data class Error(val message: String) : LyricsUiState()
+    }
+
+    private val _lyricsState = MutableStateFlow<LyricsUiState>(LyricsUiState.Idle)
+    val lyricsState: StateFlow<LyricsUiState> = _lyricsState
+
+    private var lyricsJob: Job? = null
+
     private val _isRadioMode = MutableStateFlow(false)
     val isRadioMode: StateFlow<Boolean> = _isRadioMode
+
+    // ─── Блэклист артистов для волны ───
+    val blockedArtists: StateFlow<Set<String>> = blockedArtistsRepository.blockedArtists
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+
+    private val _isCurrentArtistBlocked = MutableStateFlow(false)
+    val isCurrentArtistBlocked: StateFlow<Boolean> = _isCurrentArtistBlocked
 
     // Сколько радио-треков должно стоять впереди текущего
     private val radioBufferSize = 2
@@ -83,11 +109,18 @@ class PlayerViewModel(
     init {
         playerController.setOnTrackChangeListener { index ->
             _currentIndex.value = index
+            // Берём трек из очереди ViewModel, а если она пуста (пересоздание Activity)
+            // — из очереди контроллера, которая живёт в синглтоне
             val track = _queue.value.getOrNull(index)
+                ?: playerController.getQueue().getOrNull(index)
             _currentTrack.value = track
             track?.let {
                 checkIfSaved(it.id)
                 loadLyrics(it)
+            }
+            // Если очереди рассинхронизировались — подтягиваем полную из контроллера
+            if (playerController.getQueue().isNotEmpty() && _queue.value != playerController.getQueue()) {
+                _queue.value = playerController.getQueue()
             }
             // Режим радио: поддерживаем буфер волны впереди текущего трека
             if (_isRadioMode.value) {
@@ -97,6 +130,18 @@ class PlayerViewModel(
         playerController.setOnIsPlayingChangeListener { isPlaying ->
             _isPlaying.value = isPlaying
         }
+
+        // Восстанавливаем состояние, если плеер уже играет (переоткрытие приложения
+        // при живом PlaybackService). Контроллер-синглтон хранит ExoPlayer и очередь.
+        syncFromController()
+
+        // Следим за блэклистом — обновляем флаг для текущего трека
+        viewModelScope.launch {
+            combine(_currentTrack, blockedArtistsRepository.blockedArtists) { track, blocked ->
+                isArtistBlocked(track?.artist, blocked)
+            }.collect { _isCurrentArtistBlocked.value = it }
+        }
+
         viewModelScope.launch {
             while (isActive) {
                 if (_currentTrack.value != null) {
@@ -106,6 +151,22 @@ class PlayerViewModel(
                 }
                 delay(500)
             }
+        }
+    }
+
+    private fun syncFromController() {
+        if (!playerController.isInitialized()) return
+        val q = playerController.getQueue()
+        if (q.isEmpty()) return
+        val idx = playerController.getCurrentIndex().coerceIn(0, q.lastIndex)
+        _queue.value = q
+        _currentIndex.value = idx
+        val track = q.getOrNull(idx)
+        _currentTrack.value = track
+        _isPlaying.value = playerController.isPlaying()
+        track?.let {
+            checkIfSaved(it.id)
+            loadLyrics(it)
         }
     }
 
@@ -119,6 +180,59 @@ class PlayerViewModel(
         } else {
             stopRadio()
         }
+    }
+
+    fun toggleBlockCurrentArtist() {
+        val raw = _currentTrack.value?.artist ?: return
+        val artists = splitArtists(raw)
+        if (artists.isEmpty()) return
+        viewModelScope.launch {
+            val blocked = blockedArtistsRepository.blockedArtists.first()
+            val anyBlocked = artists.any { it in blocked }
+            if (anyBlocked) {
+                artists.forEach { blockedArtistsRepository.unblock(it) }
+                _isCurrentArtistBlocked.value = false
+            } else {
+                artists.forEach { blockedArtistsRepository.block(it) }
+                _isCurrentArtistBlocked.value = true
+                // Убираем из очереди все предстоящие треки заблокированных артистов
+                val curIdx = _currentIndex.value
+                val fullBlocked = blockedArtistsRepository.blockedArtists.first()
+                val indicesToRemove = _queue.value.mapIndexedNotNull { idx, tr ->
+                    if (idx > curIdx && isArtistBlocked(tr.artist, fullBlocked)) idx else null
+                }
+                if (indicesToRemove.isNotEmpty()) {
+                    for (idx in indicesToRemove.sortedDescending()) {
+                        val newQ = _queue.value.toMutableList().apply { removeAt(idx) }
+                        _queue.value = newQ
+                        playerController.removeAt(idx)
+                    }
+                }
+                // Если текущий трек сам в блэклисте — скипаем
+                if (isArtistBlocked(_currentTrack.value?.artist, fullBlocked)) {
+                    next()
+                }
+            }
+        }
+    }
+
+    fun unblockArtist(artist: String) {
+        viewModelScope.launch { blockedArtistsRepository.unblock(artist) }
+    }
+
+    fun clearBlockedArtists() {
+        viewModelScope.launch { blockedArtistsRepository.clearAll() }
+    }
+
+    private fun splitArtists(raw: String): List<String> =
+        raw.split(",", ";")
+            .flatMap { it.split(" & ", " feat. ", " ft. ", ignoreCase = true) }
+            .map { it.trim().lowercase() }
+            .filter { it.isNotEmpty() }
+
+    private fun isArtistBlocked(artist: String?, blocked: Set<String>): Boolean {
+        if (artist.isNullOrBlank()) return false
+        return splitArtists(artist).any { it in blocked }
     }
 
     private fun stopRadio() {
@@ -300,8 +414,10 @@ class PlayerViewModel(
                 .build()
             val downloadWork = OneTimeWorkRequestBuilder<TrackDownloadWorker>()
                 .setInputData(inputData)
+                .addTag("track_download")
+                .addTag(track.id)
                 .build()
-            workManager.enqueue(downloadWork)
+            workManager.enqueueUniqueWork(track.id, androidx.work.ExistingWorkPolicy.KEEP, downloadWork)
         }
     }
 
@@ -329,20 +445,42 @@ class PlayerViewModel(
     }
 
     private fun loadLyrics(track: Track) {
-        viewModelScope.launch {
+        lyricsJob?.cancel()
+        lyricsJob = viewModelScope.launch {
             _isLyricsLoading.value = true
+            _lyricsState.value = LyricsUiState.Loading
             _currentLyrics.value = null
             try {
-                _currentLyrics.value = lyricsRepository.getLyrics(
+                val result = lyricsRepository.getLyrics(
                     artist = track.artist,
                     title = track.title,
                     album = track.album,
                     duration = (track.duration / 1000).toInt()
                 )
+                if (result != null) {
+                    _currentLyrics.value = result
+                    _lyricsState.value = LyricsUiState.Success(result)
+                } else {
+                    _lyricsState.value = LyricsUiState.Empty
+                }
+            } catch (e: java.io.IOException) {
+                val msg = when {
+                    e.message?.contains("Timeout", ignoreCase = true) == true ->
+                        "Превышено время ожидания"
+                    else -> "Нет подключения к интернету"
+                }
+                _lyricsState.value = LyricsUiState.Error(msg)
+            } catch (e: Exception) {
+                _lyricsState.value = LyricsUiState.Error("Ошибка загрузки текста")
             } finally {
                 _isLyricsLoading.value = false
             }
         }
+    }
+
+    fun retryLyrics() {
+        val track = _currentTrack.value ?: return
+        loadLyrics(track)
     }
 
     private fun SearchTrack.toTrack() = Track(

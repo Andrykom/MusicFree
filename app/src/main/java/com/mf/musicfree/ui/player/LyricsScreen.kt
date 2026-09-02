@@ -23,16 +23,14 @@ fun LyricsScreen(
     viewModel: PlayerViewModel,
     onBack: () -> Unit
 ) {
-    val lyrics by viewModel.currentLyrics.collectAsState()
+    val lyricsState by viewModel.lyricsState.collectAsState()
     val currentPosition by viewModel.currentPosition.collectAsState()
-    val currentTrack by viewModel.currentTrack.collectAsState()
-    val isLoading by viewModel.isLyricsLoading.collectAsState()
 
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
-    // 1. Делаем локальный снимок стейта, чтобы он не поменялся прямо во время отрисовки
-    val safeLyrics = lyrics
+    // Текущий текст доступен только в состоянии Success
+    val safeLyrics = (lyricsState as? PlayerViewModel.LyricsUiState.Success)?.lyrics
 
     val currentLineIndex by remember(safeLyrics, currentPosition) {
         derivedStateOf {
@@ -52,13 +50,14 @@ fun LyricsScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        when {
-            isLoading -> {
+        when (val state = lyricsState) {
+            is PlayerViewModel.LyricsUiState.Loading,
+            is PlayerViewModel.LyricsUiState.Idle -> {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
             }
-            safeLyrics == null -> { // Проверяем локальную переменную
+            is PlayerViewModel.LyricsUiState.Empty -> {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
@@ -69,51 +68,100 @@ fun LyricsScreen(
                     }
                 }
             }
-            else -> {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(
-                        top = 350.dp,
-                        bottom = 350.dp,
-                        start = 24.dp,
-                        end = 24.dp
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(24.dp)
-                ) {
-                    itemsIndexed(
-                        // 3. Безопасное обращение к списку без оператора !!
-                        items = safeLyrics.lines,
-                        key = { index, _ -> "line_$index" }
-                    ) { index, line ->
-                        val activeIndex = if (currentLineIndex >= 0) currentLineIndex else 0
-                        val distance = abs(index - activeIndex)
-                        val isCurrent = (index == currentLineIndex)
-
-                        val alpha = when {
-                            isCurrent -> 1f
-                            distance == 1 -> 0.6f
-                            distance == 2 -> 0.3f
-                            else -> 0.15f
-                        }
-
-                        val style = when {
-                            isCurrent -> MaterialTheme.typography.headlineMedium
-                            distance <= 1 -> MaterialTheme.typography.titleLarge
-                            else -> MaterialTheme.typography.titleMedium
-                        }
-
+            is PlayerViewModel.LyricsUiState.Error -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.padding(horizontal = 24.dp)
+                    ) {
                         Text(
-                            text = line.text,
-                            style = style,
-                            color = if (isCurrent) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha)
-                            },
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth()
+                            state.message,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.error,
+                            textAlign = TextAlign.Center
                         )
+                        Button(onClick = { viewModel.retryLyrics() }) {
+                            Text("Повторить")
+                        }
+                    }
+                }
+            }
+            is PlayerViewModel.LyricsUiState.Success -> {
+                // В этой ветке текст гарантированно есть — берём из state, а не из nullable safeLyrics
+                val lyrics = state.lyrics
+                if (lyrics.isSynced) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(
+                            top = 350.dp,
+                            bottom = 350.dp,
+                            start = 24.dp,
+                            end = 24.dp
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(24.dp)
+                    ) {
+                        itemsIndexed(
+                            // 3. Безопасное обращение к списку без оператора !!
+                            items = lyrics.lines,
+                            key = { index, _ -> "line_$index" }
+                        ) { index, line ->
+                            val activeIndex = if (currentLineIndex >= 0) currentLineIndex else 0
+                            val distance = abs(index - activeIndex)
+                            val isCurrent = (index == currentLineIndex)
+
+                            val alpha = when {
+                                isCurrent -> 1f
+                                distance == 1 -> 0.6f
+                                distance == 2 -> 0.3f
+                                else -> 0.15f
+                            }
+
+                            val style = when {
+                                isCurrent -> MaterialTheme.typography.headlineMedium
+                                distance <= 1 -> MaterialTheme.typography.titleLarge
+                                else -> MaterialTheme.typography.titleMedium
+                            }
+
+                            Text(
+                                text = line.text,
+                                style = style,
+                                color = if (isCurrent) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha)
+                                },
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                } else {
+                    // Статичный текст (Genius) — обычный скролл без подсветки
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(
+                            top = 80.dp,
+                            bottom = 80.dp,
+                            start = 24.dp,
+                            end = 24.dp
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        itemsIndexed(
+                            items = lyrics.lines,
+                            key = { index, _ -> "plain_$index" }
+                        ) { _, line ->
+                            if (line.text.isNotBlank()) {
+                                Text(
+                                    text = line.text,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
                     }
                 }
             }

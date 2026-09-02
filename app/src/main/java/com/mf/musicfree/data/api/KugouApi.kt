@@ -5,6 +5,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
+import com.mf.musicfree.util.isNetworkError
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -54,6 +55,7 @@ class KugouApi(private val client: HttpClient) {
             val content = lyricResponse.content ?: return null
             String(Base64.decode(content, Base64.DEFAULT), Charsets.UTF_8)
         } catch (e: Exception) {
+            if (e.isNetworkError()) throw e
             null
         }
     }
