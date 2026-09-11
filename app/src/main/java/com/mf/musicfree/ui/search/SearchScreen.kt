@@ -1,7 +1,8 @@
 package com.mf.musicfree.ui.search
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -48,14 +49,11 @@ fun SearchScreen(
     val downloadedIds by viewModel.downloadedIds.collectAsState()
     val selectedPlugin by viewModel.selectedPlugin.collectAsState()
     val currentTrack by playerViewModel.currentTrack.collectAsState()
-    val isPlaying by playerViewModel.isPlaying.collectAsState()
 
     val plugins = remember { pluginManager.plugins }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
-
-    var trackIdToAdd by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) }
@@ -243,13 +241,11 @@ fun SearchScreen(
                 is SearchUiState.Success -> {
                     itemsIndexed(results, key = { _, item -> item.id }) { index, track ->
                         val isCurrent = track.id == currentTrack?.id
-                        val isPaused = isCurrent && !isPlaying
 
                         SearchResultItem(
                             track = track,
                             isDownloaded = track.id in downloadedIds,
                             isCurrent = isCurrent,
-                            isPaused = isPaused,
                             onClick = {
                                 if (isCurrent) {
                                     playerViewModel.togglePlayPause()
@@ -266,7 +262,8 @@ fun SearchScreen(
                                     )
                                 }
                             },
-                            onAddToPlaylist = { trackIdToAdd = track.id }
+                            onPlayNext = { playerViewModel.playNext(track) },
+                            onAddToQueue = { playerViewModel.addToQueue(track) }
                         )
                         if (index < results.lastIndex) {
                             HorizontalDivider(
@@ -279,38 +276,34 @@ fun SearchScreen(
             }
         }
     }
-
-    trackIdToAdd?.let { id ->
-        AddToPlaylistDialog(
-            trackId = id,
-            onDismiss = { trackIdToAdd = null }
-        )
-    }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SearchResultItem(
     track: SearchTrack,
     isDownloaded: Boolean,
     isCurrent: Boolean,
-    isPaused: Boolean,
     onClick: () -> Unit,
     onDownload: () -> Unit,
-    onAddToPlaylist: () -> Unit
+    onPlayNext: () -> Unit = {},
+    onAddToQueue: () -> Unit = {}
 ) {
+    var showMenu by remember { mutableStateOf(false) }
     val bgColor = if (isCurrent) {
         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
     } else {
         MaterialTheme.colorScheme.surface
     }
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(64.dp)
-            .background(bgColor)
-            .clickable { onClick() }
-            .padding(horizontal = 16.dp),
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp)
+                .background(bgColor)
+                .combinedClickable(onClick = onClick, onLongClick = { showMenu = true })
+                .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -357,23 +350,24 @@ fun SearchResultItem(
             }
         }
 
-        if (isCurrent) {
-            Icon(
-                imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(24.dp)
-            )
-        }
-
         if (!isDownloaded) {
             IconButton(onClick = onDownload) {
                 Icon(Icons.Default.Download, "Download")
             }
         }
-
-        IconButton(onClick = onAddToPlaylist) {
-            Icon(Icons.Default.Add, "В плейлист")
+        }
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = { showMenu = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text("Играть следующим") },
+                onClick = { showMenu = false; onPlayNext() }
+            )
+            DropdownMenuItem(
+                text = { Text("Добавить в очередь") },
+                onClick = { showMenu = false; onAddToQueue() }
+            )
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.mf.musicfree.ui.player
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -12,6 +13,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.mf.musicfree.player.PlayerViewModel
@@ -49,7 +51,20 @@ fun LyricsScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                var drag = 0f
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        if (drag > 120) onBack()
+                        drag = 0f
+                    },
+                    onHorizontalDrag = { _, amount -> drag += amount }
+                )
+            }
+    ) {
         when (val state = lyricsState) {
             is PlayerViewModel.LyricsUiState.Loading,
             is PlayerViewModel.LyricsUiState.Idle -> {
@@ -170,6 +185,7 @@ fun LyricsScreen(
         IconButton(
             onClick = onBack,
             modifier = Modifier
+                .statusBarsPadding()
                 .padding(start = 12.dp, top = 12.dp)
                 .background(
                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),

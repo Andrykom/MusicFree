@@ -71,9 +71,9 @@ class LyricsRepository(
             Log.w("LyricsRepository", "Disk read failed: ${e.message}")
         }
 
-        // Сеть — с таймаутом на всю цепочку
+        // Сеть — с таймаутом на всю цепочку (30с для слабого интернета)
         val result: TrackLyrics? = try {
-            withTimeout(15_000) {
+            withTimeout(30_000) {
                 val cleanTitle = cleanTitle(title)
                 var hadNetworkError = false
                 fun markNetwork(e: Throwable) {

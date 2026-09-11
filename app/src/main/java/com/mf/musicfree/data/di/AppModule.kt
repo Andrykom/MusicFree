@@ -96,7 +96,7 @@ val appModule = module {
 
     viewModel { PlayerViewModel(get(), get(), get(), get(), get(), get(), get()) }
     viewModel { SearchViewModel(get(), get(), get()) }
-    viewModel { LibraryViewModel(get(), get(), get()) }
+    viewModel { LibraryViewModel(get(), get(), get(), get()) }
     viewModel { (playlistId: String) ->
         PlaylistDetailViewModel(playlistId, get())
     }

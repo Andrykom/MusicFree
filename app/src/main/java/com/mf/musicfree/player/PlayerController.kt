@@ -105,6 +105,10 @@ class PlayerController(private val context: Context) {
         val duration = exoPlayer.duration
         if (duration > 0) exoPlayer.seekTo((progress * duration).toLong())
     }
+    fun seekToPosition(positionMs: Long) {
+        if (!::exoPlayer.isInitialized) return
+        exoPlayer.seekTo(positionMs)
+    }
     fun getCurrentProgress(): Float {
         if (!::exoPlayer.isInitialized) return 0f
         val duration = exoPlayer.duration
@@ -130,24 +134,58 @@ class PlayerController(private val context: Context) {
         val currentIndex = exoPlayer.currentMediaItemIndex.coerceAtLeast(0)
         // Синхронизируем внутренний список треков с ExoPlayer
         trackQueue = trackQueue.toMutableList().apply { addAll(currentIndex + 1, tracks) }
-        val mediaItems = tracks.map { track ->
-            val url = track.filePath ?: track.sourceUrl ?: ""
-            val coverUrl = track.coverUrl?.upscaleCover()
-            val artworkUri = coverUrl?.let { Uri.parse(it) }
-
-            MediaItem.Builder()
-                .setMediaId(track.id)
-                .setUri(url)
-                .setMediaMetadata(
-                    MediaMetadata.Builder()
-                        .setTitle(track.title)
-                        .setArtist(track.artist)
-                        .setArtworkUri(artworkUri)
-                        .build()
-                )
-                .build()
-        }
+        val mediaItems = tracks.map { it.toMediaItem() }
         exoPlayer.addMediaItems(currentIndex + 1, mediaItems)
+    }
+
+    fun insertAt(position: Int, tracks: List<Track>) {
+        ensureInitialized()
+        val pos = position.coerceIn(0, trackQueue.size)
+        trackQueue = trackQueue.toMutableList().apply { addAll(pos, tracks) }
+        val mediaItems = tracks.map { it.toMediaItem() }
+        if (pos >= exoPlayer.mediaItemCount) {
+            exoPlayer.addMediaItems(mediaItems)
+        } else {
+            exoPlayer.addMediaItems(pos, mediaItems)
+        }
+    }
+
+    fun addToEnd(tracks: List<Track>) {
+        ensureInitialized()
+        trackQueue = trackQueue + tracks
+        val mediaItems = tracks.map { it.toMediaItem() }
+        exoPlayer.addMediaItems(mediaItems)
+    }
+
+    fun addToEnd(track: Track) = addToEnd(listOf(track))
+
+    fun move(fromIndex: Int, toIndex: Int) {
+        if (fromIndex !in trackQueue.indices || toIndex !in trackQueue.indices) return
+        if (fromIndex == toIndex) return
+        val mutable = trackQueue.toMutableList()
+        val item = mutable.removeAt(fromIndex)
+        mutable.add(toIndex, item)
+        trackQueue = mutable
+        if (::exoPlayer.isInitialized) {
+            exoPlayer.moveMediaItem(fromIndex, toIndex)
+        }
+    }
+
+    private fun Track.toMediaItem(): MediaItem {
+        val url = filePath ?: sourceUrl ?: ""
+        val coverUrl = coverUrl?.upscaleCover()
+        val artworkUri = coverUrl?.let { Uri.parse(it) }
+        return MediaItem.Builder()
+            .setMediaId(id)
+            .setUri(url)
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(title)
+                    .setArtist(artist)
+                    .setArtworkUri(artworkUri)
+                    .build()
+            )
+            .build()
     }
 
     fun removeAt(index: Int) {
@@ -156,5 +194,10 @@ class PlayerController(private val context: Context) {
         if (::exoPlayer.isInitialized && index < exoPlayer.mediaItemCount) {
             exoPlayer.removeMediaItem(index)
         }
+    }
+
+    fun removeById(trackId: String) {
+        val idx = trackQueue.indexOfFirst { it.id == trackId }
+        if (idx != -1) removeAt(idx)
     }
 }

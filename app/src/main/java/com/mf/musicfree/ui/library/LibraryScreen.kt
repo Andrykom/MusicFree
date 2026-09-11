@@ -1,7 +1,9 @@
 package com.mf.musicfree.ui.library
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -62,10 +64,8 @@ private fun TracksTab(
 ) {
     val tracks by viewModel.tracks.collectAsState()
     val currentTrack by playerViewModel.currentTrack.collectAsState()
-    val isPlaying by playerViewModel.isPlaying.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val downloadFailed by viewModel.downloadFailed.collectAsState()
-    var trackIdToAdd by remember { mutableStateOf<String?>(null) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (tracks.isEmpty()) {
@@ -84,7 +84,6 @@ private fun TracksTab(
             LazyColumn {
                 itemsIndexed(tracks, key = { _, item -> item.id }) { index, track ->
                     val isCurrent = track.id == currentTrack?.id
-                    val isPaused = isCurrent && !isPlaying
                     val progress = downloadProgress[track.id]
                     val isFailed = track.id in downloadFailed
                     val isDownloading = progress != null && !track.isDownloaded
@@ -92,7 +91,6 @@ private fun TracksTab(
                     TrackItem(
                         track = track,
                         isCurrent = isCurrent,
-                        isPaused = isPaused,
                         downloadProgress = progress,
                         isFailed = isFailed,
                         isDownloading = isDownloading,
@@ -104,7 +102,8 @@ private fun TracksTab(
                             }
                         },
                         onDelete = { viewModel.deleteTrack(track) },
-                        onAddToPlaylist = { trackIdToAdd = track.id },
+                        onPlayNext = { playerViewModel.playNext(track) },
+                        onAddToQueue = { playerViewModel.addToQueue(track) },
                         onRetry = { viewModel.retryDownload(track) }
                     )
                     if (index < tracks.lastIndex) {
@@ -116,13 +115,6 @@ private fun TracksTab(
                 }
             }
         }
-    }
-
-    trackIdToAdd?.let { id ->
-        AddToPlaylistDialog(
-            trackId = id,
-            onDismiss = { trackIdToAdd = null }
-        )
     }
 }
 
@@ -315,19 +307,21 @@ fun CreatePlaylistDialog(
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TrackItem(
     track: Track,
     isCurrent: Boolean,
-    isPaused: Boolean,
     downloadProgress: Int? = null,
     isFailed: Boolean = false,
     isDownloading: Boolean = false,
     onClick: () -> Unit,
     onDelete: () -> Unit,
-    onAddToPlaylist: () -> Unit,
+    onPlayNext: () -> Unit = {},
+    onAddToQueue: () -> Unit = {},
     onRetry: () -> Unit = {}
 ) {
+    var showMenu by remember { mutableStateOf(false) }
     val bgColor = if (isCurrent) {
         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
     } else {
@@ -335,12 +329,13 @@ fun TrackItem(
     }
 
     Column(modifier = Modifier.fillMaxWidth().background(bgColor)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(64.dp)
-                .clickable { onClick() }
-                .padding(horizontal = 16.dp),
+        Box {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(64.dp)
+                    .combinedClickable(onClick = onClick, onLongClick = { showMenu = true })
+                    .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -366,15 +361,6 @@ fun TrackItem(
                     style = MaterialTheme.typography.bodySmall,
                     color = if (isCurrent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
-                )
-            }
-
-            if (isCurrent) {
-                Icon(
-                    imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp)
                 )
             }
 
@@ -404,8 +390,19 @@ fun TrackItem(
                 }
             }
 
-            IconButton(onClick = onAddToPlaylist) {
-                Icon(Icons.Default.Add, "В плейлист")
+            }
+            DropdownMenu(
+                expanded = showMenu,
+                onDismissRequest = { showMenu = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Играть следующим") },
+                    onClick = { showMenu = false; onPlayNext() }
+                )
+                DropdownMenuItem(
+                    text = { Text("Добавить в очередь") },
+                    onClick = { showMenu = false; onAddToQueue() }
+                )
             }
         }
         if (isDownloading) {

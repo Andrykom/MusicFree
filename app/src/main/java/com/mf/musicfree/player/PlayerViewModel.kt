@@ -65,6 +65,7 @@ class PlayerViewModel(
 
     private val _isShuffled = MutableStateFlow(false)
     val isShuffled: StateFlow<Boolean> = _isShuffled
+    private var originalQueue: List<Track>? = null
 
     private val _isCurrentTrackSaved = MutableStateFlow(false)
     val isCurrentTrackSaved: StateFlow<Boolean> = _isCurrentTrackSaved
@@ -98,8 +99,8 @@ class PlayerViewModel(
     private val _isCurrentArtistBlocked = MutableStateFlow(false)
     val isCurrentArtistBlocked: StateFlow<Boolean> = _isCurrentArtistBlocked
 
-    // Сколько радио-треков должно стоять впереди текущего
-    private val radioBufferSize = 2
+    // Сколько радио-треков должно стоять впереди текущего — по 1, чтобы не плодить вечно-висящие
+    private val radioBufferSize = 1
 
     private var radioSeeds: List<DeezerRadioTrack> = emptyList()
     private var radioSeedIndex = 0
@@ -324,7 +325,15 @@ class PlayerViewModel(
 
     private fun addRadioTrack(track: Track) {
         radioQueuedIds.add(track.id)
-        insertAfterCurrent(track)
+        // Вставляем в конец радио-блока, а не сразу после текущего — иначе второй трек вечно отодвигается
+        val insertPos = (_currentIndex.value + radioTracksAhead() + 1).coerceIn(0, _queue.value.size)
+        val newQueue = _queue.value.toMutableList().apply { add(insertPos, track) }
+        _queue.value = newQueue
+        playerController.insertAt(insertPos, listOf(track))
+        originalQueue?.let { orig ->
+            val posOrig = insertPos.coerceIn(0, orig.size)
+            originalQueue = orig.toMutableList().apply { add(posOrig, track) }
+        }
     }
 
     private fun insertAfterCurrent(track: Track) {
@@ -333,17 +342,90 @@ class PlayerViewModel(
         newQueue.add(currentIdx + 1, track)
         _queue.value = newQueue
         playerController.insertAfterCurrent(listOf(track))
+        originalQueue?.let { orig ->
+            val origIdx = orig.indexOfFirst { it.id == _currentTrack.value?.id }.coerceAtLeast(0)
+            originalQueue = orig.toMutableList().apply { add(origIdx + 1, track) }
+        }
+    }
+
+    // ─── Очередь: управление ───
+    fun removeFromQueue(index: Int) {
+        if (index !in _queue.value.indices) return
+        val removedId = _queue.value[index].id
+        radioQueuedIds.remove(removedId)
+        originalQueue?.let { orig ->
+            val oi = orig.indexOfFirst { it.id == removedId }
+            if (oi != -1) originalQueue = orig.toMutableList().apply { removeAt(oi) }
+        }
+        val wasCurrent = index == _currentIndex.value
+        val newQueue = _queue.value.toMutableList().apply { removeAt(index) }
+        _queue.value = newQueue
+        playerController.removeAt(index)
+        when {
+            newQueue.isEmpty() -> {
+                _currentTrack.value = null
+                _currentIndex.value = -1
+            }
+            wasCurrent -> {
+                val newIdx = index.coerceAtMost(newQueue.lastIndex)
+                _currentIndex.value = newIdx
+                _currentTrack.value = newQueue.getOrNull(newIdx)
+            }
+            index < _currentIndex.value -> _currentIndex.value = _currentIndex.value - 1
+        }
+    }
+
+    fun removeFromQueue(track: Track) {
+        val idx = _queue.value.indexOfFirst { it.id == track.id }
+        if (idx != -1) removeFromQueue(idx)
+    }
+
+    fun playNext(track: Track) = insertAfterCurrent(track)
+    fun playNext(searchTrack: SearchTrack) = playNext(searchTrack.toTrack())
+
+    fun addToQueue(track: Track) {
+        val newQueue = _queue.value + track
+        _queue.value = newQueue
+        playerController.addToEnd(track)
+        originalQueue?.let { orig -> originalQueue = orig + track }
+    }
+    fun addToQueue(searchTrack: SearchTrack) = addToQueue(searchTrack.toTrack())
+
+    fun moveQueue(from: Int, to: Int) {
+        if (from !in _queue.value.indices || to !in _queue.value.indices || from == to) return
+        val newQueue = _queue.value.toMutableList().apply { add(to, removeAt(from)) }
+        _queue.value = newQueue
+        playerController.move(from, to)
+        originalQueue?.let { orig ->
+            val movedId = newQueue[to].id
+            val origFrom = orig.indexOfFirst { it.id == movedId }
+            val ot = to.coerceIn(orig.indices)
+            if (origFrom != -1 && ot in orig.indices && origFrom != ot) {
+                originalQueue = orig.toMutableList().apply { add(ot, removeAt(origFrom)) }
+            }
+        }
+        val cur = _currentIndex.value
+        _currentIndex.value = when {
+            cur == from -> to
+            cur in (minOf(from, to) + 1)..maxOf(from, to) -> if (from < to) cur - 1 else cur + 1
+            else -> cur
+        }
     }
 
     // ─── Воспроизведение ───
 
     fun playFromQueue(tracks: List<Track>, index: Int) {
+        // Новая очередь — сбрасываем сохранённый оригинал шафла
+        if (_isShuffled.value) {
+            _isShuffled.value = false
+            originalQueue = null
+            playerController.setShuffleEnabled(false)
+        }
         _queue.value = tracks
         _currentIndex.value = index
         _currentTrack.value = tracks.getOrNull(index)
         playerController.setQueue(tracks, index)
         playerController.play()
-        _isPlaying.value = true
 
         // Если радио включено — запускаем для нового трека
         if (_isRadioMode.value) {
@@ -361,17 +443,22 @@ class PlayerViewModel(
     }
 
     fun togglePlayPause() {
-        if (_isPlaying.value) playerController.pause() else playerController.play()
+        if (playerController.isPlaying()) playerController.pause() else playerController.play()
     }
 
+    private var lastNavMs = 0L
     fun next() {
+        val now = System.currentTimeMillis()
+        if (now - lastNavMs < 200) return
+        lastNavMs = now
         playerController.next()
-        _isPlaying.value = true
     }
 
     fun previous() {
+        val now = System.currentTimeMillis()
+        if (now - lastNavMs < 200) return
+        lastNavMs = now
         playerController.previous()
-        _isPlaying.value = true
     }
 
     fun seekTo(position: Float) {
@@ -397,7 +484,36 @@ class PlayerViewModel(
     fun toggleShuffle() {
         val newValue = !_isShuffled.value
         _isShuffled.value = newValue
-        playerController.setShuffleEnabled(newValue)
+        // Отключаем встроенный шафл ExoPlayer — делаем свой, чтобы очередь совпадала с отображением
+        playerController.setShuffleEnabled(false)
+        val currentIdx = _currentIndex.value
+        val queue = _queue.value
+        if (queue.isEmpty()) return
+        val wasPlaying = playerController.isPlaying()
+        val pos = playerController.getCurrentPosition()
+        if (newValue) {
+            // Включаем: сохраняем оригинал, шафлим только хвост после текущего
+            originalQueue = queue.toList()
+            if (currentIdx in queue.indices && currentIdx + 1 < queue.size) {
+                val head = queue.subList(0, currentIdx + 1)
+                val tailShuffled = queue.subList(currentIdx + 1, queue.size).shuffled()
+                val newQueue = head + tailShuffled
+                _queue.value = newQueue
+                playerController.setQueue(newQueue, currentIdx)
+                playerController.seekToPosition(pos)
+                if (wasPlaying) playerController.play()
+            }
+        } else {
+            // Выключаем: восстанавливаем оригинал
+            val orig = originalQueue ?: return
+            val currentId = _currentTrack.value?.id
+            val newIdx = currentId?.let { id -> orig.indexOfFirst { it.id == id } }?.takeIf { it >= 0 } ?: currentIdx.coerceIn(orig.indices)
+            _queue.value = orig
+            playerController.setQueue(orig, newIdx)
+            playerController.seekToPosition(pos)
+            if (wasPlaying) playerController.play()
+            originalQueue = null
+        }
     }
 
     // ─── Сохранение ───
@@ -424,6 +540,31 @@ class PlayerViewModel(
     fun deleteCurrentTrack() {
         val track = _currentTrack.value ?: return
         viewModelScope.launch {
+            try { workManager.cancelUniqueWork(track.id) } catch (_: Exception) {}
+            track.filePath?.let { path ->
+                try { java.io.File(path).delete() } catch (_: Exception) {}
+            }
+            // Удаляем из очереди плеера
+            val idx = _queue.value.indexOfFirst { it.id == track.id }
+            if (idx != -1) {
+                val newQ = _queue.value.toMutableList().apply { removeAt(idx) }
+                _queue.value = newQ
+                try { playerController.removeAt(idx) } catch (_: Exception) {}
+                // Корректируем currentIndex
+                if (idx == _currentIndex.value) {
+                    if (newQ.isEmpty()) {
+                        _currentTrack.value = null
+                        _currentIndex.value = -1
+                        playerController.pause()
+                    } else {
+                        val newIdx = idx.coerceAtMost(newQ.lastIndex)
+                        _currentIndex.value = newIdx
+                        _currentTrack.value = newQ.getOrNull(newIdx)
+                    }
+                } else if (idx < _currentIndex.value) {
+                    _currentIndex.value = (_currentIndex.value - 1).coerceAtLeast(0)
+                }
+            }
             trackRepository.deleteTrack(track)
             _isCurrentTrackSaved.value = false
         }

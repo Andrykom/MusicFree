@@ -19,7 +19,8 @@ import kotlinx.coroutines.launch
 class LibraryViewModel(
     private val trackRepository: TrackRepository,
     private val playlistRepository: PlaylistRepository,
-    private val workManager: WorkManager
+    private val workManager: WorkManager,
+    private val playerController: com.mf.musicfree.player.PlayerController
 ) : ViewModel() {
 
     val tracks: StateFlow<List<Track>> = trackRepository.getAllTracks()
@@ -85,6 +86,12 @@ class LibraryViewModel(
 
     fun deleteTrack(track: Track) {
         viewModelScope.launch {
+            try { workManager.cancelUniqueWork(track.id) } catch (_: Exception) {}
+            track.filePath?.let { path ->
+                try { java.io.File(path).delete() } catch (_: Exception) {}
+            }
+            // Убираем из очереди плеера если там есть
+            try { playerController.removeById(track.id) } catch (_: Exception) {}
             trackRepository.deleteTrack(track)
         }
     }

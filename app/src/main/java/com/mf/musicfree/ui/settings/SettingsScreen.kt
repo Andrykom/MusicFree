@@ -31,7 +31,7 @@ fun SettingsScreen(
         item {
             ListItem(
                 headlineContent = { Text("Версия") },
-                supportingContent = { Text("MF v1.0") }
+                supportingContent = { Text("MF v1.1") }
             )
         }
         item { HorizontalDivider() }

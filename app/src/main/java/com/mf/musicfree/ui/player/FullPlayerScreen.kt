@@ -1,5 +1,11 @@
 package com.mf.musicfree.ui.player
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -11,6 +17,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
@@ -22,20 +29,25 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.mf.musicfree.player.PlayerViewModel
 import com.mf.musicfree.player.RepeatMode
 import com.mf.musicfree.ui.components.AddToPlaylistDialog
 import com.mf.musicfree.ui.components.TrackCover
 import com.mf.musicfree.util.formatDuration
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FullPlayerScreen(
     viewModel: PlayerViewModel,
     onBack: () -> Unit,
-    onLyrics: () -> Unit
+    onLyrics: () -> Unit,
+    onArtistClick: (String) -> Unit = {}
 ) {
     val currentTrack by viewModel.currentTrack.collectAsState()
     val isPlaying by viewModel.isPlaying.collectAsState()
@@ -51,42 +63,69 @@ fun FullPlayerScreen(
     val isArtistBlocked by viewModel.isCurrentArtistBlocked.collectAsState()
 
     var showAddToPlaylist by remember { mutableStateOf(false) }
+    var showQueue by remember { mutableStateOf(false) }
 
     if (currentTrack == null) {
         onBack()
         return
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Сейчас играет") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                    }
-                }
-            )
-        }
-    ) { padding ->
-        Column(
+    val offsetY = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
+    val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .padding(24.dp)
+                .background(MaterialTheme.colorScheme.background)
+                .offset { IntOffset(0, offsetY.value.toInt()) }
                 .pointerInput(Unit) {
-                    var drag = 0f
                     detectVerticalDragGestures(
                         onDragEnd = {
-                            if (drag > 120) onBack()
-                            drag = 0f
+                            scope.launch {
+                                if (offsetY.value > 300) {
+                                    onBack()
+                                } else {
+                                    offsetY.animateTo(0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium))
+                                }
+                            }
                         },
-                        onVerticalDrag = { _, amount -> drag += amount }
+                        onVerticalDrag = { change, dragAmount ->
+                            val newOffset = (offsetY.value + dragAmount).coerceAtLeast(0f)
+                            scope.launch { offsetY.snapTo(newOffset) }
+                            change.consume()
+                        }
                     )
-                },
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceEvenly
+                }
         ) {
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = { Text("Сейчас играет") },
+                        navigationIcon = {
+                            IconButton(onClick = onBack) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                            }
+                        },
+                        actions = {
+                            IconButton(onClick = { showQueue = true }) {
+                                Icon(Icons.Default.QueueMusic, contentDescription = "Очередь")
+                            }
+                        }
+                    )
+                }
+            ) { padding ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding)
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.SpaceEvenly
+                ) {
             TrackCover(
                 coverUrl = currentTrack?.coverUrl,
                 title = currentTrack?.title ?: "",
@@ -103,9 +142,10 @@ fun FullPlayerScreen(
                 Text(
                     text = currentTrack!!.artist,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.primary,
                     textAlign = TextAlign.Center,
-                    maxLines = 1
+                    maxLines = 1,
+                    modifier = Modifier.clickable { onArtistClick(currentTrack!!.artist) }
                 )
             }
 
@@ -215,11 +255,17 @@ fun FullPlayerScreen(
                 }
             }
         }
-    }
+        }
+    } // inner Box (swipeable player)
 
-    if (showAddToPlaylist) {
-        currentTrack?.id?.let { id ->
-            AddToPlaylistDialog(trackId = id, onDismiss = { showAddToPlaylist = false })
+        if (showQueue) {
+            QueueBottomSheet(viewModel = viewModel, onDismiss = { showQueue = false })
+        }
+
+        if (showAddToPlaylist) {
+            currentTrack?.id?.let { id ->
+                AddToPlaylistDialog(trackId = id, onDismiss = { showAddToPlaylist = false })
+            }
         }
     }
 }

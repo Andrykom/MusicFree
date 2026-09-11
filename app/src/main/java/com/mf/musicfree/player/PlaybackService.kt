@@ -233,8 +233,10 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
+        // Не убиваем сервис на паузе — пользователь может вернуться и нажать play.
+        // Останавливаем только когда воспроизведение реально закончено.
         val player = mediaSession?.player ?: return
-        if (!player.playWhenReady || player.playbackState == Player.STATE_ENDED) {
+        if (player.playbackState == Player.STATE_ENDED) {
             stopSelf()
         }
     }

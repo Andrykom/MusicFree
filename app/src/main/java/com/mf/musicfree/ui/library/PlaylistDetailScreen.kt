@@ -34,11 +34,9 @@ fun PlaylistDetailScreen(
 ) {
     val playlistWithTracks by viewModel.playlist.collectAsState()
     val currentTrack by playerViewModel.currentTrack.collectAsState()
-    val isPlaying by playerViewModel.isPlaying.collectAsState()
 
     val playlist = playlistWithTracks?.playlist
     val tracks = playlistWithTracks?.tracks ?: emptyList()
-    var trackIdToAdd by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0), // ← не дублируем system insets
@@ -79,12 +77,10 @@ fun PlaylistDetailScreen(
                 LazyColumn {
                     itemsIndexed(tracks, key = { _, item -> item.id }) { index, track ->
                         val isCurrent = track.id == currentTrack?.id
-                        val isPaused = isCurrent && !isPlaying
 
                         TrackItem(
                             track = track,
                             isCurrent = isCurrent,
-                            isPaused = isPaused,
                             onClick = {
                                 if (isCurrent) {
                                     playerViewModel.togglePlayPause()
@@ -92,8 +88,7 @@ fun PlaylistDetailScreen(
                                     playerViewModel.playLibraryTracks(tracks, index)
                                 }
                             },
-                            onDelete = { viewModel.removeTrack(track.id) },
-                            onAddToPlaylist = { trackIdToAdd = track.id }
+                            onDelete = { viewModel.removeTrack(track.id) }
                         )
                         if (index < tracks.lastIndex) {
                             HorizontalDivider(
@@ -105,12 +100,5 @@ fun PlaylistDetailScreen(
                 }
             }
         }
-    }
-
-    trackIdToAdd?.let { id ->
-        AddToPlaylistDialog(
-            trackId = id,
-            onDismiss = { trackIdToAdd = null }
-        )
     }
 }
