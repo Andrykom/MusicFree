@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -262,6 +263,15 @@ fun SearchScreen(
                                     )
                                 }
                             },
+                            onDelete = {
+                                viewModel.deleteTrack(track)
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        "\"${track.title}\" удален из библиотеки",
+                                        duration = SnackbarDuration.Short
+                                    )
+                                }
+                            },
                             onPlayNext = { playerViewModel.playNext(track) },
                             onAddToQueue = { playerViewModel.addToQueue(track) }
                         )
@@ -286,6 +296,7 @@ fun SearchResultItem(
     isCurrent: Boolean,
     onClick: () -> Unit,
     onDownload: () -> Unit,
+    onDelete: () -> Unit = {},
     onPlayNext: () -> Unit = {},
     onAddToQueue: () -> Unit = {}
 ) {
@@ -350,24 +361,30 @@ fun SearchResultItem(
             }
         }
 
-        if (!isDownloaded) {
+        if (isDownloaded) {
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Default.Delete, "Удалить")
+            }
+        } else {
             IconButton(onClick = onDownload) {
-                Icon(Icons.Default.Download, "Download")
+                Icon(Icons.Default.Download, "Скачать")
             }
         }
         }
-        DropdownMenu(
-            expanded = showMenu,
-            onDismissRequest = { showMenu = false }
-        ) {
-            DropdownMenuItem(
-                text = { Text("Играть следующим") },
-                onClick = { showMenu = false; onPlayNext() }
-            )
-            DropdownMenuItem(
-                text = { Text("Добавить в очередь") },
-                onClick = { showMenu = false; onAddToQueue() }
-            )
+        Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+            DropdownMenu(
+                expanded = showMenu,
+                onDismissRequest = { showMenu = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Играть следующим") },
+                    onClick = { showMenu = false; onPlayNext() }
+                )
+                DropdownMenuItem(
+                    text = { Text("Добавить в очередь") },
+                    onClick = { showMenu = false; onAddToQueue() }
+                )
+            }
         }
     }
 }

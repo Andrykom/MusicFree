@@ -10,6 +10,7 @@ import com.mf.musicfree.data.model.Playlist
 import com.mf.musicfree.data.model.Track
 import com.mf.musicfree.data.repository.PlaylistRepository
 import com.mf.musicfree.data.repository.TrackRepository
+import com.mf.musicfree.data.repository.DeviceTracksRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -20,7 +21,8 @@ class LibraryViewModel(
     private val trackRepository: TrackRepository,
     private val playlistRepository: PlaylistRepository,
     private val workManager: WorkManager,
-    private val playerController: com.mf.musicfree.player.PlayerController
+    private val playerController: com.mf.musicfree.player.PlayerController,
+    private val deviceTracksRepository: DeviceTracksRepository
 ) : ViewModel() {
 
     val tracks: StateFlow<List<Track>> = trackRepository.getAllTracks()
@@ -36,6 +38,15 @@ class LibraryViewModel(
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
+
+    private val _deviceTracksCount = MutableStateFlow(0)
+    val deviceTracksCount: StateFlow<Int> = _deviceTracksCount
+
+    fun refreshDeviceTracksCount() {
+        viewModelScope.launch {
+            _deviceTracksCount.value = deviceTracksRepository.getDeviceTracksCount()
+        }
+    }
 
     private val _downloadProgress = MutableStateFlow<Map<String, Int>>(emptyMap())
     val downloadProgress: StateFlow<Map<String, Int>> = _downloadProgress
@@ -62,6 +73,7 @@ class LibraryViewModel(
 
     init {
         workLiveData.observeForever(workObserver)
+        refreshDeviceTracksCount()
     }
 
     override fun onCleared() {

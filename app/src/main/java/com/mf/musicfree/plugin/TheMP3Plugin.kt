@@ -87,13 +87,18 @@ class TheMP3Plugin(
     private suspend fun enrichWithCovers(tracks: List<SearchTrack>): List<SearchTrack> {
         if (tracks.isEmpty()) return tracks
         return coroutineScope {
-            tracks.map { track ->
+            tracks.mapIndexed { index, track ->
                 async {
-                    try {
-                        val cover = coverProvider.searchCover(track.artist, track.title)
-                        track.copy(coverUrl = cover)
-                    } catch (e: Exception) {
-                        Log.e("TheMP3Plugin", "Cover fetch failed for ${track.title}", e)
+                    if (index < 6) {
+                        try {
+                            val cover = kotlinx.coroutines.withTimeoutOrNull(1500) {
+                                coverProvider.searchCover(track.artist, track.title)
+                            }
+                            track.copy(coverUrl = cover)
+                        } catch (e: Exception) {
+                            track
+                        }
+                    } else {
                         track
                     }
                 }

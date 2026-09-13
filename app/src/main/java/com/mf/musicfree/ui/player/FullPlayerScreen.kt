@@ -2,10 +2,12 @@ package com.mf.musicfree.ui.player
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -17,7 +19,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.QueueMusic
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
@@ -60,6 +62,7 @@ fun FullPlayerScreen(
 
     // Подписываемся на стейт радио
     val isRadioMode by viewModel.isRadioMode.collectAsState()
+    val isRadioBuffering by viewModel.isRadioBuffering.collectAsState()
     val isArtistBlocked by viewModel.isCurrentArtistBlocked.collectAsState()
 
     var showAddToPlaylist by remember { mutableStateOf(false) }
@@ -112,7 +115,7 @@ fun FullPlayerScreen(
                         },
                         actions = {
                             IconButton(onClick = { showQueue = true }) {
-                                Icon(Icons.Default.QueueMusic, contentDescription = "Очередь")
+                                Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Очередь")
                             }
                         }
                     )
@@ -126,10 +129,37 @@ fun FullPlayerScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.SpaceEvenly
                 ) {
+            var coverDragOffsetX by remember { mutableFloatStateOf(0f) }
+            val animatedOffsetX by animateFloatAsState(
+                targetValue = coverDragOffsetX,
+                animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                label = "coverOffset"
+            )
+
             TrackCover(
                 coverUrl = currentTrack?.coverUrl,
                 title = currentTrack?.title ?: "",
-                modifier = Modifier.size(280.dp)
+                modifier = Modifier
+                    .size(280.dp)
+                    .offset { IntOffset(animatedOffsetX.toInt(), 0) }
+                    .pointerInput(currentTrack?.id) {
+                        detectHorizontalDragGestures(
+                            onDragStart = { coverDragOffsetX = 0f },
+                            onDragEnd = {
+                                if (coverDragOffsetX < -120f) {
+                                    viewModel.next()
+                                } else if (coverDragOffsetX > 120f) {
+                                    viewModel.previous()
+                                }
+                                coverDragOffsetX = 0f
+                            },
+                            onDragCancel = { coverDragOffsetX = 0f },
+                            onHorizontalDrag = { change, dragAmount ->
+                                change.consume()
+                                coverDragOffsetX = (coverDragOffsetX + dragAmount).coerceIn(-250f, 250f)
+                            }
+                        )
+                    }
             )
 
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -149,17 +179,29 @@ fun FullPlayerScreen(
                 )
             }
 
+            var isDragging by remember { mutableStateOf(false) }
+            var dragProgress by remember { mutableFloatStateOf(0f) }
+            val displayProgress = if (isDragging) dragProgress else progress
+            val displayPosition = if (isDragging) (dragProgress * duration).toLong() else currentPosition
+
             Column(modifier = Modifier.fillMaxWidth()) {
                 Slider(
-                    value = progress,
-                    onValueChange = { viewModel.seekTo(it) },
+                    value = displayProgress.coerceIn(0f, 1f),
+                    onValueChange = {
+                        isDragging = true
+                        dragProgress = it
+                    },
+                    onValueChangeFinished = {
+                        viewModel.seekTo(dragProgress)
+                        isDragging = false
+                    },
                     modifier = Modifier.fillMaxWidth()
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(currentPosition.formatDuration(), style = MaterialTheme.typography.labelMedium)
+                    Text(displayPosition.formatDuration(), style = MaterialTheme.typography.labelMedium)
                     Text(duration.formatDuration(), style = MaterialTheme.typography.labelMedium)
                 }
             }
@@ -189,8 +231,19 @@ fun FullPlayerScreen(
                         modifier = Modifier.size(36.dp)
                     )
                 }
-                IconButton(onClick = { viewModel.next() }) {
-                    Icon(Icons.Default.SkipNext, "Next", modifier = Modifier.size(36.dp))
+                IconButton(
+                    onClick = { viewModel.next() },
+                    enabled = !isRadioBuffering
+                ) {
+                    if (isRadioBuffering) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(28.dp),
+                            strokeWidth = 2.5.dp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Icon(Icons.Default.SkipNext, "Next", modifier = Modifier.size(36.dp))
+                    }
                 }
                 IconButton(onClick = { viewModel.toggleRepeat() }) {
                     Icon(

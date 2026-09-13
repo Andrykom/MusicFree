@@ -11,6 +11,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.mf.musicfree.data.repository.PlaylistRepository
+import com.mf.musicfree.data.model.Track
+import com.mf.musicfree.data.repository.TrackRepository
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -19,9 +21,11 @@ import org.koin.compose.koinInject
 @Composable
 fun AddToPlaylistDialog(
     trackId: String,
+    track: Track? = null,
     onDismiss: () -> Unit
 ) {
     val playlistRepository: PlaylistRepository = koinInject()
+    val trackRepository: TrackRepository = koinInject()
     val playlists by playlistRepository.getAllPlaylists()
         .collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
@@ -41,6 +45,9 @@ fun AddToPlaylistDialog(
                             ListItem(
                                 modifier = Modifier.clickable {
                                     scope.launch {
+                                        if (track != null) {
+                                            trackRepository.addTrack(track)
+                                        }
                                         playlistRepository.addTrackToPlaylist(playlist.id, trackId)
                                         onDismiss()
                                     }
@@ -71,6 +78,9 @@ fun AddToPlaylistDialog(
                                     val all = playlistRepository.getAllPlaylists().first()
                                     val created = all.firstOrNull { it.name == newPlaylistName.trim() }
                                     created?.let {
+                                        if (track != null) {
+                                            trackRepository.addTrack(track)
+                                        }
                                         playlistRepository.addTrackToPlaylist(it.id, trackId)
                                     }
                                     onDismiss()

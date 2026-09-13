@@ -39,6 +39,9 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 ksp {
@@ -92,4 +95,8 @@ dependencies {
 
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+    testImplementation(libs.junit)
+    testImplementation("org.json:json:20231013")
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.espresso.core)
 }

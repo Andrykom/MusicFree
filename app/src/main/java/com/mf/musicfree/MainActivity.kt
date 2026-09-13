@@ -30,14 +30,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Запускаем сервис. Повторный старт безопасен: у работающего сервиса
-        // просто вызовется onStartCommand
-        val serviceIntent = Intent(this, PlaybackService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
-        }
+
 
         enableEdgeToEdge()
         setContent {

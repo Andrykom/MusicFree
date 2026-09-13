@@ -6,94 +6,109 @@ Android-плеер для поиска и стриминга музыки из �
 
 ## Возможности
 
-- **Поиск по 3 источникам** — плагинная система `SourcePlugin`: `DriveMusic` / `TheMP3` / `Zvuch` (чипсы на экране поиска, дедупликация по `id`)
-- **Стриминг + фон** — `Media3/ExoPlayer` + `MediaSessionService`, нотификация с обложкой, `AudioFocus`/`BecomingNoisy` (пауза при звонке/вытаскивании наушников)
-- **Скачивание** — `WorkManager` с прогрессом (`0-100%`/`indeterminate`), `LinearProgress` в библиотеке, ретрай, отмена, чистка файла при удалении (`filesDir/music`)
-- **Библиотека и плейлисты** — `Room` (`tracks`, `playlist_tracks`, `cached_lyrics`), удаление чистит файл и очередь
-- **Очередь** — `BottomSheet` в фулл-плеере (`QueueMusic`): свайп `SwipeToDismissBox` → удаление, тап → играть, `animateItem` + автоскролл к текущему; лонг-пресс на треке в списках → меню *«Играть следующим / Добавить в очередь»* (`insertAfterCurrent` / `addToEnd`)
-- **Шафл** — свой (не `ExoPlayer`): шафлится только хвост после текущего, `originalQueue` для восстановления, позиция трека сохраняется (`seekToPosition`)
-- **Волна** — `DeezerRadioApi` → `PluginManager`: буфер `1` трек вперёд, `insertAt(end)` (FIFO, без вечного хвоста), автопродление сидов, фильтр блэклиста
-- **Блэклист артистов** — `DataStore` `blocked_artists` (нормализация `lowercase`, сплит `,; & feat.`), кнопка `Block` в фулле (красный когда в блэке), управление в настройках, чистка очереди при блоке
-- **Тексты** — цепочка `Netease → LrcLib(with/without duration) → Kugou → Genius` (чистка `()` в названии, `[]` и `*Lyrics` в Genius, `30s` таймаут), 3-уровневый кэш `memory → Room(cached_lyrics) → сеть` (переживает офлайн, инвалидация грязного кэша), `LyricsUiState` (`Idle/Loading/Success/Empty/Error` + ретрай), свайп `→` выход из текста, отдельный вид для `isSynced` (караоке) и `plain`
-- **Обложки** — `CoverProvider` `iTunes → Deezer`, либо нативные с сайта (`Zvuch`), `upscaleCover` `100→600`, `Coil` + `TrackCover`
-- **UI/Навигация** — `Compose Material3`, `HorizontalPager(beyondViewportPageCount=2)` для вкладок, `AnimatedVisibility` bottomBar, `FullPlayer`/`Lyrics` как оверлеи `slideIn/Out(350ms)` с `Animatable` свайпом вниз (за пальцем) и фоном, кликабельный артист в фулле (`primary`, `→ поиск`), упрощённые `TrackItem` (только `Скачать/Удалить`, подсветка вместо иконки паузы)
+- **Поиск по 3 веб-источникам** — плагинная система `SourcePlugin`: `DriveMusic` / `TheMP3` / `Zvuch` (чипсы на экране поиска, дедупликация по `id`, выбор источника по умолчанию).
+- **Импорт из Яндекс Музыки** — быстрый перенос треков из открытых плейлистов Яндекс Музыки по ссылке прямо в «Мою музыку»:
+  - Извлечение данных через официальные API-эндпоинты и веб-парсинг без ограничений на размер (поддержка больших плейлистов на 1000+ треков).
+  - Умный каскадный поиск (`Zvuch` → `TheMP3` → `DriveMusic`) с авто-фолбэком на основного артиста при фитах.
+  - Сохранение исходного хронологического порядка добавления треков.
+- **Музыка с устройства (Локальные треки)** — закрепленный системный плейлист во вкладке «Плейлисты»:
+  - Чтение медиатеки через Android `MediaStore` (поддержка Android 13+ `READ_MEDIA_AUDIO` и старых версий).
+  - Автоматическая подгрузка онлайн-обложек высокого разрешения (`CoverProvider`) и синхронизированных караоке-текстов для файлов устройства.
+  - Возможность добавления локальных файлов в пользовательские плейлисты.
+- **Акустический кроссфейд** — настоящее плавное наложение треков на стыке:
+  - Реализован через дополнительный независимый `crossfadePlayer`: затухающий трек переносится во вспомогательный плеер, пока основной плеер параллельно начинает следующий трек с нарастанием громкости.
+  - Настройка длительности (Выкл, 2, 4, 8 сек) в Настройках.
+- **Стриминг + фон** — `Media3/ExoPlayer` + `MediaSessionService`, нотификация с обложкой, `AudioFocus`/`BecomingNoisy` (пауза при звонке/отключении наушников).
+- **Скачивание** — фоновая загрузка через `WorkManager` с отображением прогресса (`0-100%`/`indeterminate`), `LinearProgress` в библиотеке, автоповтор, отмена, удаление файлов (`filesDir/music`).
+- **Библиотека и плейлисты** — локальная БД `Room` (`tracks`, `playlist_tracks`, `cached_lyrics`), удаление трека очищает файл и очередь.
+- **Очередь воспроизведения** — `BottomSheet` в полноэкранном плеере (`QueueMusic`): свайп для удаления, переключение по тапу, анимации списка и защита от случайного перемещения играющего трека; контекстное меню треков *«Играть следующим / Добавить в очередь»*.
+- **Умный шафл** — перемешивание только хвоста очереди после текущей позиции, сохранение `originalQueue` для возврата к исходному порядку.
+- **Моя волна (Радио)** — персональное радио по артисту через `DeezerRadioApi` с каскадным фолбэком на плагины, буфер в 1 трек вперёд (FIFO), автопродление и фильтрация блэклиста.
+- **Блэклист артистов** — исключение нежелательных исполнителей из волны через `DataStore` (нормализация, парсинг фитов), мгновенное удаление из очереди, управление в Настройках.
+- **Синхронизированные тексты песен** — многоуровневый парсинг `Netease → LrcLib → Kugou → Genius` с очисткой названий, 3-уровневый кэш `RAM → Room → Сеть` с поддержкой офлайна, караоке-режим (`isSynced`) и обычный текст.
+- **Обложки высокого разрешения** — провайдер `iTunes → Deezer` с апскейлом до 600px или нативные обложки из поисковых источников.
+- **Поддержать автора** — окно крипто-пожертвований в Настройках с поддержкой BTC, ETH, Solana, BNB Chain, USDT TRC-20 и копированием в один клик.
+- **UI / Навигация** — `Jetpack Compose Material 3`, жестовое управление (свайп вниз для закрытия плеера/текста за пальцем), адаптивная навигация, кликабельные имена артистов с переходом в поиск.
 
-## Стек
+## Стек технологий
 
-Kotlin 2.0 · Compose BOM 2024.09 + Material3 · Navigation Compose · Media3 1.4.1 (ExoPlayer, Session) · Room 2.6.1 (KSP) · Koin 3.5 · Ktor 2.3 (Android) + ContentNegotiation · Jsoup 1.17 · WorkManager 2.9 · Coil 2.7 · DataStore 1.1 · Coroutines/Flow
+Kotlin 2.0 · Compose BOM 2024.09 + Material3 · Navigation Compose · Media3 1.4.1 (ExoPlayer, Session) · Room 2.6.1 (KSP) · Koin 3.5 · Ktor 2.3 (Android) + ContentNegotiation · Jsoup 1.17 · WorkManager 2.9 · Coil 2.7 · DataStore 1.1 · Coroutines / Flow
 
-## Сборка
+## Сборка и запуск
 
-1. [Android Studio Ladybug+](https://developer.android.com/studio) (в комплекте JDK 17+)
-2. `File → Open` → папка проекта → дождаться `Gradle Sync` (`local.properties` создастся автоматом)
+1. [Android Studio Ladybug+](https://developer.android.com/studio) (JDK 17-21)
+2. `File → Open` → папка проекта → дождаться синхронизации `Gradle Sync`
 3. `Run ▶` (minSdk 26, targetSdk 35)
 
-```bash
-./gradlew assembleDebug            # Windows: gradlew.bat assembleDebug
-```
-
-Если `Could not resolve com.android.tools.build:gradle … requires JVM 11`:
+### Сборка APK из терминала:
 ```powershell
-$env:JAVA_HOME = "C:\Users\<user>\.jdks\corretto-22.0.2"  # или studio\jbr
+# Windows
+$env:JAVA_HOME = "C:\Users\<user>\.jdks\ms-21.0.12.1"  # путь к вашей Java 17-21
 .\gradlew.bat assembleDebug
 ```
 
-Схемы Room лежат в `app/schemas/` — коммить их, без них `ksp` не сгенерит миграции.
+```bash
+# Linux / macOS
+./gradlew assembleDebug
+```
 
-## Архитектура
+### Запуск модульных тестов:
+```powershell
+.\gradlew.bat testDebugUnitTest
+```
+
+Схемы Room хранятся в папке `app/schemas/` — они необходимы для автоматической генерации миграций через KSP.
+
+## Архитектура проекта
 
 ```
 app/src/main/java/com/mf/musicfree/
-├── plugin/                 # SourcePlugin(name, search) + PluginManager
+├── plugin/                 # Модули источников музыки (SourcePlugin + PluginManager)
 │   ├── DriveMusicPlugin / TheMP3Plugin / ZvuchPlugin
 │   └── exception/PluginException
 ├── data/
-│   ├── api/                # Deezer/DeezerRadio, ITunes, Netease, LrcLib, Kugou, Genius, CoverProvider
-│   ├── db/                 # AppDatabase v4 (tracks, playlist_tracks, cached_lyrics) + Migrations 2→3,3→4
+│   ├── api/                # Клиенты Deezer, ITunes, Netease, LrcLib, Kugou, Genius, CoverProvider
+│   ├── db/                 # Room БД (tracks, playlist_tracks, cached_lyrics) + миграции
 │   │   └── dao/TrackDao, PlaylistDao, LyricsDao
-│   ├── model/Track, Playlist, CachedLyrics, Lyrics
-│   ├── preferences/BlockedArtistsRepository (DataStore)
-│   ├── download/TrackDownloadWorker (progress)
-│   └── repository/Track/Playlist/Lyrics/RadioRepository
-├── player/                 # PlaybackService (MediaSession, AudioFocus, BecomingNoisy)
-│   ├── PlayerController    # trackQueue, ExoPlayer, insertAt/addToEnd/move/removeById
-│   └── PlayerViewModel     # queue/currentIndex/currentTrack, radio (buffer=1), queue ops, shuffle(originalQueue), blockedArtists, lyricsState
+│   ├── model/              # Модели данных Track, Playlist, CachedLyrics, Lyrics
+│   ├── preferences/        # SettingsRepository, BlockedArtistsRepository (DataStore)
+│   ├── download/           # Фоновая загрузка TrackDownloadWorker (WorkManager)
+│   ├── importer/           # Импорт плейлистов: PlaylistWebExtractor, MusicImportService
+│   └── repository/         # Track, Playlist, Lyrics, Radio, DeviceTracksRepository
+├── player/                 # Воспроизведение аудио и системный сервис
+│   ├── PlaybackService     # MediaSessionService, AudioFocus, BecomingNoisy
+│   ├── PlayerController    # Основной ExoPlayer + crossfadePlayer, управление очередью
+│   └── PlayerViewModel     # Состояние плеера, кроссфейд, очередь, радио, шафл
 └── ui/
-    ├── MainScreen          # HorizontalPager(3) + NavHost(playlist_detail) + overlay FullPlayer/Lyrics
-    ├── search/SearchScreen # чипсы плагинов, distinctBy(id), combinedClickable → queue menu
-    ├── library/LibraryScreen, PlaylistDetailScreen
-    ├── player/FullPlayerScreen (offset+swipe), LyricsScreen (plain vs synced), MiniPlayer (swipe up), QueueBottomSheet
-    └── settings/SettingsScreen (блэклист)
+    ├── MainScreen          # Корневой экран с Pager, оверлеями FullPlayer и Lyrics
+    ├── search/             # Поиск треков, чипсы плагинов, контекстные меню
+    ├── library/            # Моя музыка, Плейлисты, Треки с устройства (Device), Детали плейлиста
+    ├── player/             # FullPlayerScreen, LyricsScreen, MiniPlayer, QueueBottomSheet
+    └── settings/           # Настройки: Импорт Яндекс Музыки, Кроссфейд, Блэклист, Донаты
 ```
 
-### Добавить новый источник
+## Разработка и мониторинг
 
-```kotlin
-class MyPlugin : SourcePlugin {
-    override val name = "MySource"
-    override suspend fun search(query: String): List<SearchTrack> {
-        // Ktor + Jsoup, вернуть SearchTrack(id,title,artist,duration,coverUrl,audioUrl)
-    }
-}
-// AppModule.kt
-single { PluginManager().apply { register(MyPlugin()) } }
-```
+- **Логи импорта Яндекс Музыки:**
+  ```shell
+  adb logcat -s MusicImport
+  ```
+- **Логи плагинов и скрейперов:**
+  ```shell
+  adb logcat -s DriveMusicPlugin:D TheMP3Plugin:D ZvuchPlugin:D LyricsRepository:D
+  ```
+- **Логи плеера и кроссфейда:**
+  ```shell
+  adb logcat -s PlayerController:D PlayerViewModel:D
+  ```
 
-## Разработка
+## Обновление на GitHub
 
-- Логи скрейперов: `adb logcat -s DriveMusicPlugin:D TheMP3Plugin:D ZvuchPlugin:D LyricsRepository:D GeniusApi:D`
-- Проверка сайта: `curl -A "Mozilla/5.0" "https://wwv.zvuch.com/search?q=..." | grep -o 'data-artist="[^"]*"'`
-- Миграции Room — писать в `AppDatabase.MIGRATION_X_Y`, не использовать `fallbackToDestructiveMigration` для новых версий
-
-## Обновление на GitHub (GitHub Desktop)
-
-1. Открой GitHub Desktop → `File → Add local repository` → выбери `MusicFree2` (если уже добавлен — просто открой)
-2. В `Changes` увидишь изменённые файлы + `app/schemas/.../4.json`
-3. Внизу `Summary` → `Update: queue, wave, lyrics, pager` → `Commit to main`
-4. `Push origin` (вверху `Push origin` / `Publish branch` если первый раз)
-
-На втором ПК: `File → Clone repository` → выбери `MusicFree` → `Open in Android Studio`.
+1. Откройте **GitHub Desktop** (или используйте терминал).
+2. Проверьте изменения во вкладке `Changes` (включая схемы `app/schemas/` и код).
+3. Укажите название коммита (например, `Release v1.2: Yandex import, device music, acoustic crossfade, donate dialog`).
+4. Нажмите `Commit to main` и затем `Push origin`.
 
 ## Лицензия
 
-Только для личного использования.
+Проект предназначен исключительно для личного и ознакомительного использования.

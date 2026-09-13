@@ -11,11 +11,15 @@ import com.mf.musicfree.data.api.NeteaseApi
 import com.mf.musicfree.data.api.GeniusApi
 import com.mf.musicfree.data.api.DeezerRadioApi
 import com.mf.musicfree.data.db.AppDatabase
+import com.mf.musicfree.data.importer.MusicImportService
+import com.mf.musicfree.data.importer.PlaylistWebExtractor
+import com.mf.musicfree.data.repository.DeviceTracksRepository
 import com.mf.musicfree.data.repository.LyricsRepository
 import com.mf.musicfree.data.repository.PlaylistRepository
 import com.mf.musicfree.data.repository.RadioRepository
 import com.mf.musicfree.data.repository.TrackRepository
 import com.mf.musicfree.data.preferences.BlockedArtistsRepository
+import com.mf.musicfree.data.preferences.SettingsRepository
 import com.mf.musicfree.player.PlayerController
 import com.mf.musicfree.player.PlayerViewModel
 import com.mf.musicfree.ui.library.PlaylistDetailViewModel
@@ -55,6 +59,7 @@ val appModule = module {
     single { PlayerController(androidContext()) }
     single { WorkManager.getInstance(androidContext()) }
     single { BlockedArtistsRepository(androidContext()) }
+    single { SettingsRepository(androidContext()) }
 
     // Ktor HTTP client (теперь используется для LrcLib, Netease и Genius)
     single {
@@ -93,11 +98,14 @@ val appModule = module {
     }
 
     single { RadioRepository(get(), get(), get()) } // DeezerRadioApi, PluginManager, BlockedArtists
+    single { DeviceTracksRepository(androidContext()) }
+    single { PlaylistWebExtractor() }
+    single { MusicImportService(get(), get(), get()) }
 
-    viewModel { PlayerViewModel(get(), get(), get(), get(), get(), get(), get()) }
-    viewModel { SearchViewModel(get(), get(), get()) }
-    viewModel { LibraryViewModel(get(), get(), get(), get()) }
+    viewModel { PlayerViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    viewModel { SearchViewModel(get(), get(), get(), get(), get()) }
+    viewModel { LibraryViewModel(get(), get(), get(), get(), get()) }
     viewModel { (playlistId: String) ->
-        PlaylistDetailViewModel(playlistId, get())
+        PlaylistDetailViewModel(playlistId, get(), get())
     }
 }

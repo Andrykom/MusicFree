@@ -75,13 +75,18 @@ class DriveMusicPlugin(
         }
 
         coroutineScope {
-            tracks.map { track ->
+            tracks.mapIndexed { index, track ->
                 async {
-                    try {
-                        val cover = coverProvider.searchCover(track.artist, track.title)
-                        track.copy(coverUrl = cover)
-                    } catch (e: Exception) {
-                        Log.e("DriveMusicPlugin", "Cover fetch failed for ${track.title}", e)
+                    if (index < 6) {
+                        try {
+                            val cover = kotlinx.coroutines.withTimeoutOrNull(1500) {
+                                coverProvider.searchCover(track.artist, track.title)
+                            }
+                            track.copy(coverUrl = cover)
+                        } catch (e: Exception) {
+                            track
+                        }
+                    } else {
                         track
                     }
                 }

@@ -13,7 +13,10 @@ import com.mf.musicfree.plugin.SearchTrack
 import com.mf.musicfree.plugin.SourcePlugin
 import com.mf.musicfree.plugin.exception.PluginException
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 sealed class SearchUiState {
@@ -27,7 +30,9 @@ sealed class SearchUiState {
 class SearchViewModel(
     private val pluginManager: PluginManager,
     private val trackRepository: TrackRepository,
-    private val workManager: WorkManager
+    private val workManager: WorkManager,
+    private val playerController: com.mf.musicfree.player.PlayerController? = null,
+    private val settingsRepository: com.mf.musicfree.data.preferences.SettingsRepository? = null
 ) : ViewModel() {
 
     private val _query = MutableStateFlow("")
@@ -45,14 +50,31 @@ class SearchViewModel(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
 
-    private val _downloadedIds = MutableStateFlow<Set<String>>(emptySet())
-    val downloadedIds: StateFlow<Set<String>> = _downloadedIds
+    val downloadedIds: StateFlow<Set<String>> = trackRepository.getAllTracks()
+        .map { list -> list.map { it.id }.toSet() }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptySet()
+        )
 
     private val _selectedPlugin = MutableStateFlow<SourcePlugin?>(null)
     val selectedPlugin: StateFlow<SourcePlugin?> = _selectedPlugin
 
     init {
         _selectedPlugin.value = pluginManager.plugins.firstOrNull()
+        settingsRepository?.let { repo ->
+            viewModelScope.launch {
+                repo.defaultPluginName.collect { defaultName ->
+                    if (defaultName != null) {
+                        val plugin = pluginManager.getPlugin(defaultName)
+                        if (plugin != null) {
+                            _selectedPlugin.value = plugin
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fun onQueryChange(newQuery: String) {
@@ -161,9 +183,28 @@ class SearchViewModel(
                     .build()
 
                 workManager.enqueueUniqueWork(searchTrack.id, androidx.work.ExistingWorkPolicy.KEEP, downloadWork)
-                _downloadedIds.value = _downloadedIds.value + searchTrack.id
             } catch (e: Exception) {
                 _error.value = "Не удалось добавить трек: ${e.message}"
+            }
+        }
+    }
+
+    fun deleteTrack(searchTrack: SearchTrack) {
+        viewModelScope.launch {
+            try {
+                workManager.cancelUniqueWork(searchTrack.id)
+                val existing = trackRepository.getTrackById(searchTrack.id)
+                existing?.filePath?.let { path ->
+                    try { java.io.File(path).delete() } catch (_: Exception) {}
+                }
+                try { playerController?.removeById(searchTrack.id) } catch (_: Exception) {}
+                if (existing != null) {
+                    trackRepository.deleteTrack(existing)
+                } else {
+                    trackRepository.deleteById(searchTrack.id)
+                }
+            } catch (e: Exception) {
+                _error.value = "Не удалось удалить трек: ${e.message}"
             }
         }
     }

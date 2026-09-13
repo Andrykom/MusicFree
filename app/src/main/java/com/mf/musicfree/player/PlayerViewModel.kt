@@ -6,6 +6,7 @@ import androidx.media3.common.Player
 import androidx.work.Data
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import com.mf.musicfree.data.api.CoverProvider
 import com.mf.musicfree.data.api.DeezerRadioTrack
 import com.mf.musicfree.data.download.TrackDownloadWorker
 import com.mf.musicfree.data.model.Track
@@ -18,12 +19,16 @@ import com.mf.musicfree.data.preferences.BlockedArtistsRepository
 import com.mf.musicfree.plugin.SearchTrack
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import com.mf.musicfree.data.preferences.SettingsRepository
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -36,7 +41,9 @@ class PlayerViewModel(
     private val playlistRepository: PlaylistRepository,
     private val lyricsRepository: LyricsRepository,
     private val radioRepository: RadioRepository,
-    private val blockedArtistsRepository: BlockedArtistsRepository
+    private val blockedArtistsRepository: BlockedArtistsRepository,
+    private val settingsRepository: SettingsRepository? = null,
+    private val coverProvider: CoverProvider? = null
 ) : ViewModel() {
 
     private val _queue = MutableStateFlow<List<Track>>(emptyList())
@@ -87,10 +94,16 @@ class PlayerViewModel(
     private val _lyricsState = MutableStateFlow<LyricsUiState>(LyricsUiState.Idle)
     val lyricsState: StateFlow<LyricsUiState> = _lyricsState
 
+    private val _playbackErrorEvent = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val playbackErrorEvent: SharedFlow<String> = _playbackErrorEvent.asSharedFlow()
+
     private var lyricsJob: Job? = null
 
     private val _isRadioMode = MutableStateFlow(false)
     val isRadioMode: StateFlow<Boolean> = _isRadioMode
+
+    private val _isRadioBuffering = MutableStateFlow(false)
+    val isRadioBuffering: StateFlow<Boolean> = _isRadioBuffering
 
     // ─── Блэклист артистов для волны ───
     val blockedArtists: StateFlow<Set<String>> = blockedArtistsRepository.blockedArtists
@@ -108,6 +121,14 @@ class PlayerViewModel(
     private val radioQueuedIds = mutableSetOf<String>()
 
     init {
+        settingsRepository?.let { repo ->
+            viewModelScope.launch {
+                repo.crossfadeSeconds.collect { sec ->
+                    playerController.setCrossfadeSeconds(sec)
+                }
+            }
+        }
+
         playerController.setOnTrackChangeListener { index ->
             _currentIndex.value = index
             // Берём трек из очереди ViewModel, а если она пуста (пересоздание Activity)
@@ -118,6 +139,7 @@ class PlayerViewModel(
             track?.let {
                 checkIfSaved(it.id)
                 loadLyrics(it)
+                loadCoverIfMissing(it)
             }
             // Если очереди рассинхронизировались — подтягиваем полную из контроллера
             if (playerController.getQueue().isNotEmpty() && _queue.value != playerController.getQueue()) {
@@ -128,8 +150,31 @@ class PlayerViewModel(
                 ensureRadioBuffer()
             }
         }
+
         playerController.setOnIsPlayingChangeListener { isPlaying ->
             _isPlaying.value = isPlaying
+        }
+
+        playerController.setOnPlayerErrorListener { error ->
+            val title = _currentTrack.value?.title ?: "Трек"
+            _playbackErrorEvent.tryEmit("Не удалось воспроизвести: «$title»")
+            // Автоматически переходим к следующему треку в очереди, если он есть
+            if (_queue.value.size > 1 && _currentIndex.value < _queue.value.lastIndex) {
+                next()
+            } else {
+                _isPlaying.value = false
+            }
+        }
+
+        playerController.setOnQueueChangeListener { updatedQueue ->
+            _queue.value = updatedQueue
+            val curIdx = playerController.getCurrentIndex().coerceIn(-1, updatedQueue.lastIndex)
+            _currentIndex.value = curIdx
+            val track = updatedQueue.getOrNull(curIdx)
+            _currentTrack.value = track
+            if (track == null && updatedQueue.isEmpty()) {
+                _isPlaying.value = false
+            }
         }
 
         // Восстанавливаем состояние, если плеер уже играет (переоткрытие приложения
@@ -145,12 +190,34 @@ class PlayerViewModel(
 
         viewModelScope.launch {
             while (isActive) {
-                if (_currentTrack.value != null) {
+                if (_currentTrack.value != null && _isPlaying.value) {
                     _progress.value = playerController.getCurrentProgress()
-                    _duration.value = playerController.getDuration()
-                    _currentPosition.value = playerController.getCurrentPosition()
+                    val dur = playerController.getDuration()
+                    _duration.value = dur
+                    val pos = playerController.getCurrentPosition()
+                    _currentPosition.value = pos
+
+                    // Проверяем возможность естественного акустического кроссфейда в конце трека
+                    val xSec = playerController.getCrossfadeSeconds()
+                    if (xSec > 0 && dur > 0 && !playerController.isCrossfading()) {
+                        val remainingMs = dur - pos
+                        val crossfadeMs = xSec * 1000L
+                        val curIdx = _currentIndex.value
+                        val hasNext = curIdx + 1 < _queue.value.size || _repeatMode.value != RepeatMode.NONE
+                        if (remainingMs in 1..crossfadeMs && hasNext) {
+                            playerController.performCrossfadeToNext(remainingMs)
+                        }
+                    }
+
+                    delay(150)
+                } else {
+                    if (_currentTrack.value != null) {
+                        _progress.value = playerController.getCurrentProgress()
+                        _duration.value = playerController.getDuration()
+                        _currentPosition.value = playerController.getCurrentPosition()
+                    }
+                    delay(1000)
                 }
-                delay(500)
             }
         }
     }
@@ -168,6 +235,7 @@ class PlayerViewModel(
         track?.let {
             checkIfSaved(it.id)
             loadLyrics(it)
+            loadCoverIfMissing(it)
         }
     }
 
@@ -242,6 +310,7 @@ class PlayerViewModel(
         radioSeeds = emptyList()
         radioSeedIndex = 0
         radioQueuedIds.clear()
+        _isRadioBuffering.value = false
     }
 
     private fun startRadioForCurrent() {
@@ -252,9 +321,14 @@ class PlayerViewModel(
             radioSeedIndex = 0
             if (radioSeeds.isEmpty()) {
                 _isRadioMode.value = false
+                _playbackErrorEvent.tryEmit("Не удалось найти треки для волны")
                 return@launch
             }
             runRadioLoader()
+            if (radioTracksAhead() == 0 && _isRadioMode.value) {
+                _isRadioMode.value = false
+                _playbackErrorEvent.tryEmit("Не удалось загрузить треки для волны")
+            }
         }
     }
 
@@ -277,26 +351,34 @@ class PlayerViewModel(
     }
 
     private suspend fun runRadioLoader() {
+        if (radioTracksAhead() == 0) {
+            _isRadioBuffering.value = true
+        }
         var addedSinceRefill = 0
-        while (_isRadioMode.value && radioTracksAhead() < radioBufferSize) {
-            // Seeds кончились — продолжаем волну от текущего артиста
-            if (radioSeedIndex >= radioSeeds.size) {
-                if (!refillSeeds(addedSinceRefill)) break
-                addedSinceRefill = 0
-            }
+        try {
+            while (_isRadioMode.value && radioTracksAhead() < radioBufferSize) {
+                // Seeds кончились — продолжаем волну от текущего артиста
+                if (radioSeedIndex >= radioSeeds.size) {
+                    if (!refillSeeds(addedSinceRefill)) break
+                    addedSinceRefill = 0
+                }
 
-            val seed = radioSeeds[radioSeedIndex++]
-            val track = try {
-                radioRepository.findTrack(seed.artist.name, seed.title)
-            } catch (_: Exception) { null }
+                val seed = radioSeeds[radioSeedIndex++]
+                val track = try {
+                    radioRepository.findTrack(seed.artist.name, seed.title)
+                } catch (_: Exception) { null }
 
-            val duplicate = track == null ||
-                    track.id in radioQueuedIds ||
-                    track.id == _currentTrack.value?.id
-            if (track != null && !duplicate) {
-                addRadioTrack(track)
-                addedSinceRefill++
+                val duplicate = track == null ||
+                        track.id in radioQueuedIds ||
+                        track.id == _currentTrack.value?.id
+                if (track != null && !duplicate) {
+                    addRadioTrack(track)
+                    addedSinceRefill++
+                    _isRadioBuffering.value = false
+                }
             }
+        } finally {
+            _isRadioBuffering.value = false
         }
     }
 
@@ -307,6 +389,7 @@ class PlayerViewModel(
     private suspend fun refillSeeds(addedSinceRefill: Int): Boolean {
         if (addedSinceRefill == 0) {
             _isRadioMode.value = false
+            _playbackErrorEvent.tryEmit("Волна завершена: новые треки не найдены")
             return false
         }
         val sourceArtist = _currentTrack.value?.artist ?: run {
@@ -318,6 +401,7 @@ class PlayerViewModel(
         radioSeedIndex = 0
         if (newSeeds.isEmpty()) {
             _isRadioMode.value = false
+            _playbackErrorEvent.tryEmit("Волна завершена: новые треки не найдены")
             return false
         }
         return true
@@ -393,6 +477,7 @@ class PlayerViewModel(
 
     fun moveQueue(from: Int, to: Int) {
         if (from !in _queue.value.indices || to !in _queue.value.indices || from == to) return
+        if (from == _currentIndex.value || to == _currentIndex.value) return
         val newQueue = _queue.value.toMutableList().apply { add(to, removeAt(from)) }
         _queue.value = newQueue
         playerController.move(from, to)
@@ -448,6 +533,7 @@ class PlayerViewModel(
 
     private var lastNavMs = 0L
     fun next() {
+        if (_isRadioBuffering.value) return
         val now = System.currentTimeMillis()
         if (now - lastNavMs < 200) return
         lastNavMs = now
@@ -464,6 +550,19 @@ class PlayerViewModel(
     fun seekTo(position: Float) {
         playerController.seekTo(position)
         _progress.value = position
+        val dur = _duration.value
+        if (dur > 0) {
+            _currentPosition.value = (position * dur).toLong()
+        }
+    }
+
+    fun seekToPosition(positionMs: Long) {
+        playerController.seekToPosition(positionMs)
+        _currentPosition.value = positionMs
+        val dur = _duration.value
+        if (dur > 0) {
+            _progress.value = (positionMs.toFloat() / dur).coerceIn(0f, 1f)
+        }
     }
 
     fun toggleRepeat() {
@@ -492,23 +591,25 @@ class PlayerViewModel(
         val wasPlaying = playerController.isPlaying()
         val pos = playerController.getCurrentPosition()
         if (newValue) {
-            // Включаем: сохраняем оригинал, шафлим только хвост после текущего
+            // Включаем: сохраняем оригинал. Текущий трек ставим на первое место (индекс 0), а все остальные перемешиваем
             originalQueue = queue.toList()
-            if (currentIdx in queue.indices && currentIdx + 1 < queue.size) {
-                val head = queue.subList(0, currentIdx + 1)
-                val tailShuffled = queue.subList(currentIdx + 1, queue.size).shuffled()
-                val newQueue = head + tailShuffled
-                _queue.value = newQueue
-                playerController.setQueue(newQueue, currentIdx)
-                playerController.seekToPosition(pos)
-                if (wasPlaying) playerController.play()
-            }
+            val current = _currentTrack.value ?: queue.getOrNull(currentIdx) ?: queue.first()
+            val others = queue.filterIndexed { idx, _ -> idx != currentIdx }.shuffled()
+            val newQueue = listOf(current) + others
+            _queue.value = newQueue
+            _currentIndex.value = 0
+            _currentTrack.value = current
+            playerController.setQueue(newQueue, 0)
+            playerController.seekToPosition(pos)
+            if (wasPlaying) playerController.play()
         } else {
-            // Выключаем: восстанавливаем оригинал
+            // Выключаем: восстанавливаем оригинал без потери позиции играющего трека
             val orig = originalQueue ?: return
             val currentId = _currentTrack.value?.id
             val newIdx = currentId?.let { id -> orig.indexOfFirst { it.id == id } }?.takeIf { it >= 0 } ?: currentIdx.coerceIn(orig.indices)
             _queue.value = orig
+            _currentIndex.value = newIdx
+            _currentTrack.value = orig.getOrNull(newIdx)
             playerController.setQueue(orig, newIdx)
             playerController.seekToPosition(pos)
             if (wasPlaying) playerController.play()
@@ -571,9 +672,37 @@ class PlayerViewModel(
     }
 
     fun addCurrentTrackToPlaylist(playlistId: String) {
-        val trackId = _currentTrack.value?.id ?: return
+        val track = _currentTrack.value ?: return
         viewModelScope.launch {
-            playlistRepository.addTrackToPlaylist(playlistId, trackId)
+            trackRepository.addTrack(track)
+            playlistRepository.addTrackToPlaylist(playlistId, track.id)
+        }
+    }
+
+    private var coverJob: Job? = null
+
+    private fun loadCoverIfMissing(track: Track) {
+        coverJob?.cancel()
+        // Если уже есть онлайн обложка (http/https), не ищем
+        if (!track.coverUrl.isNullOrBlank() && track.coverUrl.startsWith("http")) {
+            return
+        }
+        val provider = coverProvider ?: return
+        coverJob = viewModelScope.launch {
+            try {
+                val foundCover = provider.searchCover(track.artist, track.title)
+                if (!foundCover.isNullOrBlank()) {
+                    if (_currentTrack.value?.id == track.id) {
+                        _currentTrack.value = _currentTrack.value?.copy(coverUrl = foundCover)
+                    }
+                    _queue.value = _queue.value.map {
+                        if (it.id == track.id) it.copy(coverUrl = foundCover) else it
+                    }
+                    if (trackRepository.exists(track.id)) {
+                        trackRepository.updateCover(track.id, foundCover)
+                    }
+                }
+            } catch (_: Exception) {}
         }
     }
 

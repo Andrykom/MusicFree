@@ -8,12 +8,15 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -66,6 +69,13 @@ private fun TracksTab(
     val currentTrack by playerViewModel.currentTrack.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val downloadFailed by viewModel.downloadFailed.collectAsState()
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(tracks.firstOrNull()?.id) {
+        if (tracks.isNotEmpty() && listState.firstVisibleItemIndex <= 1) {
+            listState.animateScrollToItem(0)
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (tracks.isEmpty()) {
@@ -81,7 +91,7 @@ private fun TracksTab(
                 )
             }
         } else {
-            LazyColumn {
+            LazyColumn(state = listState) {
                 itemsIndexed(tracks, key = { _, item -> item.id }) { index, track ->
                     val isCurrent = track.id == currentTrack?.id
                     val progress = downloadProgress[track.id]
@@ -124,31 +134,81 @@ private fun PlaylistsTab(
     onNavigate: (String) -> Unit
 ) {
     val playlists by viewModel.playlists.collectAsState()
+    val deviceTracksCount by viewModel.deviceTracksCount.collectAsState()
     var showCreateDialog by remember { mutableStateOf(false) }
 
+    LaunchedEffect(Unit) {
+        viewModel.refreshDeviceTracksCount()
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
-        if (playlists.isEmpty()) {
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.MusicNote,
-                    contentDescription = null,
-                    modifier = Modifier.size(64.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+        LazyColumn(
+            contentPadding = PaddingValues(vertical = 8.dp)
+        ) {
+            // Закрепленный специальный плейлист "Музыка с устройства"
+            item(key = "device_tracks_pinned") {
+                ListItem(
+                    modifier = Modifier.clickable { onNavigate("playlist_detail/device") },
+                    headlineContent = {
+                        Text(
+                            "Музыка с устройства",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    },
+                    supportingContent = {
+                        val countText = if (deviceTracksCount > 0) {
+                            "$deviceTracksCount ${trackCountString(deviceTracksCount)}"
+                        } else {
+                            "Локальные треки"
+                        }
+                        Text(
+                            countText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    leadingContent = {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .background(
+                                    MaterialTheme.colorScheme.secondaryContainer,
+                                    shape = MaterialTheme.shapes.medium
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PhoneAndroid,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                    }
                 )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    "Нет плейлистов",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    thickness = 0.5.dp
                 )
             }
-        } else {
-            LazyColumn(
-                contentPadding = PaddingValues(vertical = 8.dp)
-            ) {
+
+            if (playlists.isEmpty()) {
+                item {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 40.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            "Нет созданных плейлистов",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            } else {
                 items(playlists, key = { it.playlist.id }) { playlistWithTracks ->
                     PlaylistItem(
                         playlistWithTracks = playlistWithTracks,
@@ -316,10 +376,11 @@ fun TrackItem(
     isFailed: Boolean = false,
     isDownloading: Boolean = false,
     onClick: () -> Unit,
-    onDelete: () -> Unit,
+    onDelete: (() -> Unit)? = null,
     onPlayNext: () -> Unit = {},
     onAddToQueue: () -> Unit = {},
-    onRetry: () -> Unit = {}
+    onRetry: () -> Unit = {},
+    onAddToPlaylist: (() -> Unit)? = null
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val bgColor = if (isCurrent) {
@@ -384,25 +445,39 @@ fun TrackItem(
                     }
                 }
                 else -> {
-                    IconButton(onClick = onDelete) {
-                        Icon(Icons.Default.Delete, "Delete")
+                    if (onDelete != null) {
+                        IconButton(onClick = onDelete) {
+                            Icon(Icons.Default.Delete, "Delete")
+                        }
+                    } else {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(Icons.Default.MoreVert, "Меню")
+                        }
                     }
                 }
             }
 
             }
-            DropdownMenu(
-                expanded = showMenu,
-                onDismissRequest = { showMenu = false }
-            ) {
-                DropdownMenuItem(
-                    text = { Text("Играть следующим") },
-                    onClick = { showMenu = false; onPlayNext() }
-                )
-                DropdownMenuItem(
-                    text = { Text("Добавить в очередь") },
-                    onClick = { showMenu = false; onAddToQueue() }
-                )
+            Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Играть следующим") },
+                        onClick = { showMenu = false; onPlayNext() }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Добавить в очередь") },
+                        onClick = { showMenu = false; onAddToQueue() }
+                    )
+                    if (onAddToPlaylist != null) {
+                        DropdownMenuItem(
+                            text = { Text("Добавить в плейлист") },
+                            onClick = { showMenu = false; onAddToPlaylist() }
+                        )
+                    }
+                }
             }
         }
         if (isDownloading) {

@@ -57,17 +57,7 @@ class PlaybackService : MediaSessionService() {
         super.onCreate()
 
         val playerController: PlayerController by inject()
-        val player = ExoPlayer.Builder(this)
-            .setAudioAttributes(
-                androidx.media3.common.AudioAttributes.Builder()
-                    .setUsage(androidx.media3.common.C.USAGE_MEDIA)
-                    .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC)
-                    .build(),
-                /* handleAudioFocus = */ true
-            )
-            .setHandleAudioBecomingNoisy(true)
-            .build()
-        playerController.init(player)
+        val player = playerController.getExoPlayer()
 
         mediaSession = MediaSession.Builder(this, player).build()
 
@@ -80,7 +70,9 @@ class PlaybackService : MediaSessionService() {
             }
         })
 
-        updateNotification(player)
+        if (player.currentMediaItem != null) {
+            updateNotification(player)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -245,7 +237,6 @@ class PlaybackService : MediaSessionService() {
         currentCoverJob?.cancel()
         serviceScope.cancel()
         mediaSession?.run {
-            player.release()
             release()
             mediaSession = null
         }

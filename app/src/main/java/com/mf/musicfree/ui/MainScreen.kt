@@ -46,6 +46,16 @@ fun MainScreen() {
 
     var showPlayer by remember { mutableStateOf(false) }
     var showLyrics by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(Unit) {
+        playerViewModel.playbackErrorEvent.collect { errorMessage ->
+            snackbarHostState.showSnackbar(
+                message = errorMessage,
+                duration = SnackbarDuration.Short
+            )
+        }
+    }
 
     BackHandler(enabled = showLyrics) {
         showLyrics = false
@@ -57,6 +67,7 @@ fun MainScreen() {
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
+            snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
                 AnimatedVisibility(
                     visible = !showPlayer && !showLyrics,

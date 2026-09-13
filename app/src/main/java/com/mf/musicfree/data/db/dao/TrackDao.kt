@@ -27,6 +27,9 @@ interface TrackDao {
     @Query("UPDATE tracks SET filePath = :path, isDownloaded = 1 WHERE id = :id")
     suspend fun updateFilePath(id: String, path: String)
 
+    @Query("UPDATE tracks SET coverUrl = :coverUrl WHERE id = :id")
+    suspend fun updateCover(id: String, coverUrl: String)
+
     @Query("SELECT EXISTS(SELECT 1 FROM tracks WHERE id = :id)")
     suspend fun exists(id: String): Boolean
 }
