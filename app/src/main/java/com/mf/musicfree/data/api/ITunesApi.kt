@@ -25,17 +25,7 @@ data class ITunesResult(
     @SerialName("artworkUrl100") val artworkUrl100: String? = null
 )
 
-class ITunesApi {
-    private val client = HttpClient(Android) {
-        install(HttpRequestRetry) {
-            retryOnServerErrors(maxRetries = 3)
-            exponentialDelay()
-        }
-        engine {
-            connectTimeout = 8000
-            socketTimeout = 10000
-        }
-    }
+class ITunesApi(private val client: HttpClient) {
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun searchCover(artist: String, title: String): String? = withContext(Dispatchers.IO) {

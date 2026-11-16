@@ -39,46 +39,42 @@ class TrackDownloadWorker(
             val musicDir = File(applicationContext.filesDir, "music").apply { mkdirs() }
             val outputFile = File(musicDir, fileName)
 
-            val client = HttpClient(Android)
-            val response: HttpResponse = client.get(audioUrl)
+            HttpClient(Android).use { client ->
+                val response: HttpResponse = client.get(audioUrl)
 
-            if (!response.status.isSuccess()) {
-                return Result.failure(workDataOf("error" to "HTTP ${response.status}"))
-            }
+                if (!response.status.isSuccess()) {
+                    return Result.failure(workDataOf("error" to "HTTP ${response.status}"))
+                }
 
-            val total = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: -1L
-            var downloaded = 0L
-            var lastProgress = -1
+                val total = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: -1L
+                var downloaded = 0L
+                var lastProgress = -1
 
-            val channel: ByteReadChannel = response.bodyAsChannel()
-            outputFile.outputStream().use { fileStream ->
-                while (!channel.isClosedForRead) {
-                    val packet = channel.readRemaining(DEFAULT_BUFFER_SIZE.toLong())
-                    while (!packet.isEmpty) {
-                        val bytes = packet.readBytes()
-                        fileStream.write(bytes)
-                        downloaded += bytes.size
-                        if (total > 0) {
-                            val progress = ((downloaded * 100) / total).toInt().coerceIn(0, 100)
-                            if (progress != lastProgress && progress % 2 == 0) {
-                                lastProgress = progress
-                                setProgress(workDataOf(KEY_PROGRESS to progress))
-                            }
-                        } else {
-                            // Неизвестный размер — шлём -1 как indeterminate
-                            if (downloaded % (64 * 1024) == 0L) {
-                                setProgress(workDataOf(KEY_PROGRESS to -1))
+                val channel: ByteReadChannel = response.bodyAsChannel()
+                outputFile.outputStream().use { fileStream ->
+                    while (!channel.isClosedForRead) {
+                        val packet = channel.readRemaining(DEFAULT_BUFFER_SIZE.toLong())
+                        while (!packet.isEmpty) {
+                            val bytes = packet.readBytes()
+                            fileStream.write(bytes)
+                            downloaded += bytes.size
+                            if (total > 0) {
+                                val progress = ((downloaded * 100) / total).toInt().coerceIn(0, 100)
+                                if (progress != lastProgress && progress % 2 == 0) {
+                                    lastProgress = progress
+                                    setProgress(workDataOf(KEY_PROGRESS to progress))
+                                }
+                            } else {
+                                if (downloaded % (64 * 1024) == 0L) {
+                                    setProgress(workDataOf(KEY_PROGRESS to -1))
+                                }
                             }
                         }
                     }
                 }
             }
 
-            client.close()
-
             setProgress(workDataOf(KEY_PROGRESS to 100))
-
-            // Обновляем БД — теперь файл скачан
             trackRepository.updateFilePath(trackId, outputFile.absolutePath)
 
             Result.success(

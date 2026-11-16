@@ -11,6 +11,8 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.mf.musicfree.data.model.Track
 import kotlinx.coroutines.*
+import androidx.annotation.OptIn
+import androidx.media3.common.util.UnstableApi
 
 class PlayerController(private val context: Context) {
     private lateinit var exoPlayer: ExoPlayer
@@ -19,6 +21,11 @@ class PlayerController(private val context: Context) {
     private var onPlayerError: ((PlaybackException) -> Unit)? = null
     private var onQueueChange: ((List<Track>) -> Unit)? = null
     private var trackQueue: List<Track> = emptyList()
+
+    private var originalQueue: List<Track>? = null
+    private var savedRepeatMode: RepeatMode = RepeatMode.NONE
+    private var savedIsShuffled: Boolean = false
+    private var savedIsRadioMode: Boolean = false
 
     private var crossfadeSeconds: Int = 0
     private var fadeJob: Job? = null
@@ -66,6 +73,7 @@ class PlayerController(private val context: Context) {
     fun getCurrentIndex(): Int =
         if (::exoPlayer.isInitialized) exoPlayer.currentMediaItemIndex else -1
 
+    @OptIn(UnstableApi::class)
     fun startServiceIfNeeded() {
         val serviceIntent = Intent(context, PlaybackService::class.java)
         try {
@@ -131,6 +139,15 @@ class PlayerController(private val context: Context) {
         exoPlayer.play()
     }
     fun pause() {
+        fadeJob?.cancel()
+        if (isCrossfading) {
+            isCrossfading = false
+            crossfadePlayer?.stop()
+            crossfadePlayer?.clearMediaItems()
+            if (::exoPlayer.isInitialized) {
+                exoPlayer.volume = 1.0f
+            }
+        }
         if (::exoPlayer.isInitialized) exoPlayer.pause()
     }
     private var crossfadePlayer: ExoPlayer? = null
@@ -222,6 +239,37 @@ class PlayerController(private val context: Context) {
             exoPlayer.volume = 1.0f
             exoPlayer.seekToNext()
         }
+    }
+
+    fun replaceQueueKeepingCurrent(newQueue: List<Track>, newCurrentIndex: Int) {
+        trackQueue = newQueue
+        if (!::exoPlayer.isInitialized || exoPlayer.mediaItemCount == 0) {
+            setQueue(newQueue, newCurrentIndex)
+            return
+        }
+
+        val currentExoIdx = exoPlayer.currentMediaItemIndex
+        // 1. Удаляем все элементы ПОСЛЕ текущего
+        if (currentExoIdx + 1 < exoPlayer.mediaItemCount) {
+            exoPlayer.removeMediaItems(currentExoIdx + 1, exoPlayer.mediaItemCount)
+        }
+        // 2. Удаляем все элементы ДО текущего (после этого текущий трек окажется на индексе 0)
+        if (currentExoIdx > 0) {
+            exoPlayer.removeMediaItems(0, currentExoIdx)
+        }
+
+        // 3. Вставляем треки, которые должны стоять ДО текущего (если выключаем shuffle)
+        if (newCurrentIndex > 0) {
+            val beforeItems = newQueue.subList(0, newCurrentIndex).map { it.toMediaItem() }
+            exoPlayer.addMediaItems(0, beforeItems)
+        }
+        // 4. Вставляем треки, которые должны стоять ПОСЛЕ текущего
+        if (newCurrentIndex + 1 < newQueue.size) {
+            val afterItems = newQueue.subList(newCurrentIndex + 1, newQueue.size).map { it.toMediaItem() }
+            exoPlayer.addMediaItems(newCurrentIndex + 1, afterItems)
+        }
+
+        onQueueChange?.invoke(trackQueue)
     }
 
     fun previous() {
@@ -342,5 +390,25 @@ class PlayerController(private val context: Context) {
     fun removeById(trackId: String) {
         val idx = trackQueue.indexOfFirst { it.id == trackId }
         if (idx != -1) removeAt(idx)
+    }
+
+    fun getSavedRepeatMode(): RepeatMode = savedRepeatMode
+    fun setSavedRepeatMode(mode: RepeatMode) {
+        savedRepeatMode = mode
+    }
+
+    fun getSavedIsShuffled(): Boolean = savedIsShuffled
+    fun setSavedIsShuffled(shuffled: Boolean) {
+        savedIsShuffled = shuffled
+    }
+
+    fun getOriginalQueue(): List<Track>? = originalQueue
+    fun setOriginalQueue(queue: List<Track>?) {
+        originalQueue = queue
+    }
+
+    fun getSavedIsRadioMode(): Boolean = savedIsRadioMode
+    fun setSavedIsRadioMode(enabled: Boolean) {
+        savedIsRadioMode = enabled
     }
 }

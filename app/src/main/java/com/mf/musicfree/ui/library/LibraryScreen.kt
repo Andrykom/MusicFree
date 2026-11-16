@@ -11,13 +11,14 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhoneAndroid
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -25,7 +26,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.mf.musicfree.data.model.Playlist
 import com.mf.musicfree.data.model.PlaylistWithTracks
 import com.mf.musicfree.data.model.Track
 import com.mf.musicfree.player.PlayerViewModel
@@ -70,6 +70,7 @@ private fun TracksTab(
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val downloadFailed by viewModel.downloadFailed.collectAsState()
     val listState = rememberLazyListState()
+    var addToPlaylistTrack by remember { mutableStateOf<Track?>(null) }
 
     LaunchedEffect(tracks.firstOrNull()?.id) {
         if (tracks.isNotEmpty() && listState.firstVisibleItemIndex <= 1) {
@@ -114,7 +115,11 @@ private fun TracksTab(
                         onDelete = { viewModel.deleteTrack(track) },
                         onPlayNext = { playerViewModel.playNext(track) },
                         onAddToQueue = { playerViewModel.addToQueue(track) },
-                        onRetry = { viewModel.retryDownload(track) }
+                        onDownload = if (!track.isDownloaded && !isDownloading && !track.sourceUrl.isNullOrBlank()) {
+                            { viewModel.retryDownload(track) }
+                        } else null,
+                        onRetry = { viewModel.retryDownload(track) },
+                        onAddToPlaylist = { addToPlaylistTrack = track }
                     )
                     if (index < tracks.lastIndex) {
                         HorizontalDivider(
@@ -125,6 +130,14 @@ private fun TracksTab(
                 }
             }
         }
+    }
+
+    addToPlaylistTrack?.let { track ->
+        AddToPlaylistDialog(
+            trackId = track.id,
+            track = track,
+            onDismiss = { addToPlaylistTrack = null }
+        )
     }
 }
 
@@ -287,7 +300,7 @@ private fun PlaylistItem(
         trailingContent = {
             Box {
                 IconButton(onClick = { showMenu = true }) {
-                    Text("⋮", style = MaterialTheme.typography.titleLarge)
+                    Icon(Icons.Default.MoreVert, contentDescription = "Меню плейлиста")
                 }
                 DropdownMenu(
                     expanded = showMenu,
@@ -379,6 +392,7 @@ fun TrackItem(
     onDelete: (() -> Unit)? = null,
     onPlayNext: () -> Unit = {},
     onAddToQueue: () -> Unit = {},
+    onDownload: (() -> Unit)? = null,
     onRetry: () -> Unit = {},
     onAddToPlaylist: (() -> Unit)? = null
 ) {
@@ -389,14 +403,17 @@ fun TrackItem(
         MaterialTheme.colorScheme.surface
     }
 
-    Column(modifier = Modifier.fillMaxWidth().background(bgColor)) {
-        Box {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(64.dp)
-                    .combinedClickable(onClick = onClick, onLongClick = { showMenu = true })
-                    .padding(horizontal = 16.dp),
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(bgColor)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp)
+                .combinedClickable(onClick = onClick, onLongClick = { showMenu = true })
+                .padding(start = 16.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -417,77 +434,127 @@ fun TrackItem(
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                 )
-                Text(
-                    text = track.artist,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (isCurrent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
-                )
-            }
-
-            when {
-                isDownloading -> {
-                    if (downloadProgress != null && downloadProgress >= 0) {
-                        Text(
-                            "${downloadProgress}%",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.dp
-                    )
-                }
-                isFailed -> {
-                    IconButton(onClick = onRetry) {
-                        Icon(Icons.Default.MusicNote, "Повторить", tint = MaterialTheme.colorScheme.error)
-                    }
-                }
-                else -> {
-                    if (onDelete != null) {
-                        IconButton(onClick = onDelete) {
-                            Icon(Icons.Default.Delete, "Delete")
-                        }
-                    } else {
-                        IconButton(onClick = { showMenu = true }) {
-                            Icon(Icons.Default.MoreVert, "Меню")
-                        }
-                    }
-                }
-            }
-
-            }
-            Box(modifier = Modifier.align(Alignment.CenterEnd)) {
-                DropdownMenu(
-                    expanded = showMenu,
-                    onDismissRequest = { showMenu = false }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    DropdownMenuItem(
-                        text = { Text("Играть следующим") },
-                        onClick = { showMenu = false; onPlayNext() }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Добавить в очередь") },
-                        onClick = { showMenu = false; onAddToQueue() }
-                    )
-                    if (onAddToPlaylist != null) {
-                        DropdownMenuItem(
-                            text = { Text("Добавить в плейлист") },
-                            onClick = { showMenu = false; onAddToPlaylist() }
+                    if (track.isDownloaded) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Скачано",
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.primary
                         )
+                    }
+                    Text(
+                        text = track.artist,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isCurrent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                when {
+                    isDownloading -> {
+                        if (downloadProgress != null && downloadProgress >= 0) {
+                            Text(
+                                "${downloadProgress}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(end = 6.dp)
+                            )
+                        }
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .padding(end = 8.dp)
+                                .size(22.dp),
+                            strokeWidth = 2.dp
+                        )
+                    }
+                    isFailed -> {
+                        IconButton(onClick = onRetry) {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "Повторить загрузку",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                    onDownload != null -> {
+                        IconButton(onClick = onDownload) {
+                            Icon(
+                                Icons.Default.Download,
+                                contentDescription = "Скачать в офлайн",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                Box {
+                    IconButton(onClick = { showMenu = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Меню")
+                    }
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Играть следующим") },
+                            onClick = { showMenu = false; onPlayNext() }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Добавить в очередь") },
+                            onClick = { showMenu = false; onAddToQueue() }
+                        )
+                        if (onAddToPlaylist != null) {
+                            DropdownMenuItem(
+                                text = { Text("Добавить в плейлист") },
+                                onClick = { showMenu = false; onAddToPlaylist() }
+                            )
+                        }
+                        if (onDelete != null) {
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "Удалить",
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                },
+                                onClick = { showMenu = false; onDelete() },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            )
+                        }
                     }
                 }
             }
         }
+
         if (isDownloading) {
             if (downloadProgress != null && downloadProgress >= 0) {
                 LinearProgressIndicator(
                     progress = { downloadProgress / 100f },
-                    modifier = Modifier.fillMaxWidth().height(2.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp)
                 )
             } else {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(2.dp))
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp)
+                )
             }
         }
     }

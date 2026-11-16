@@ -33,17 +33,7 @@ data class DeezerAlbum(
     @SerialName("cover_small") val coverSmall: String? = null
 )
 
-class DeezerApi {
-    private val client = HttpClient(Android) {
-        install(HttpRequestRetry) {
-            retryOnServerErrors(maxRetries = 2)
-            exponentialDelay()
-        }
-        engine {
-            connectTimeout = 8000
-            socketTimeout = 10000
-        }
-    }
+class DeezerApi(private val client: HttpClient) {
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun searchCover(artist: String, title: String): String? = withContext(Dispatchers.IO) {

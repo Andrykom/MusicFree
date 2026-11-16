@@ -153,11 +153,7 @@ fun MainScreen() {
             exit = slideOutVertically(targetOffsetY = { it }, animationSpec = tween(350)),
             modifier = Modifier.fillMaxSize()
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.background)
-            ) {
+            Box(modifier = Modifier.fillMaxSize()) {
                 FullPlayerScreen(
                     viewModel = playerViewModel,
                     onBack = { showPlayer = false },

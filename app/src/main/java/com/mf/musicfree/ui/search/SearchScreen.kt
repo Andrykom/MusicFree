@@ -24,6 +24,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -50,7 +51,9 @@ fun SearchScreen(
     val downloadedIds by viewModel.downloadedIds.collectAsState()
     val selectedPlugin by viewModel.selectedPlugin.collectAsState()
     val currentTrack by playerViewModel.currentTrack.collectAsState()
+    val libraryIds by viewModel.libraryIds.collectAsState()
 
+    val context = LocalContext.current
     val plugins = remember { pluginManager.plugins }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -246,6 +249,7 @@ fun SearchScreen(
                         SearchResultItem(
                             track = track,
                             isDownloaded = track.id in downloadedIds,
+                            isInLibrary = track.id in libraryIds,
                             isCurrent = isCurrent,
                             onClick = {
                                 if (isCurrent) {
@@ -258,7 +262,16 @@ fun SearchScreen(
                                 viewModel.downloadTrack(track)
                                 scope.launch {
                                     snackbarHostState.showSnackbar(
-                                        "\"${track.title}\" добавлен в библиотеку",
+                                        "Скачивание «${track.title}»...",
+                                        duration = SnackbarDuration.Short
+                                    )
+                                }
+                            },
+                            onAddToLibrary = {
+                                viewModel.addToLibraryOnly(track)
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        "«${track.title}» добавлен в Мою музыку",
                                         duration = SnackbarDuration.Short
                                     )
                                 }
@@ -267,7 +280,7 @@ fun SearchScreen(
                                 viewModel.deleteTrack(track)
                                 scope.launch {
                                     snackbarHostState.showSnackbar(
-                                        "\"${track.title}\" удален из библиотеки",
+                                        "«${track.title}» удален из библиотеки",
                                         duration = SnackbarDuration.Short
                                     )
                                 }
@@ -293,9 +306,11 @@ fun SearchScreen(
 fun SearchResultItem(
     track: SearchTrack,
     isDownloaded: Boolean,
+    isInLibrary: Boolean = false,
     isCurrent: Boolean,
     onClick: () -> Unit,
     onDownload: () -> Unit,
+    onAddToLibrary: () -> Unit = {},
     onDelete: () -> Unit = {},
     onPlayNext: () -> Unit = {},
     onAddToQueue: () -> Unit = {}
@@ -361,21 +376,32 @@ fun SearchResultItem(
             }
         }
 
-        if (isDownloaded) {
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Default.Delete, "Удалить")
+            if (isDownloaded) {
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Default.Delete, "Удалить", tint = MaterialTheme.colorScheme.primary)
+                }
+            } else {
+                IconButton(onClick = onDownload) {
+                    Icon(Icons.Default.Download, "Скачать")
+                }
             }
-        } else {
-            IconButton(onClick = onDownload) {
-                Icon(Icons.Default.Download, "Скачать")
-            }
-        }
         }
         Box(modifier = Modifier.align(Alignment.CenterEnd)) {
             DropdownMenu(
                 expanded = showMenu,
                 onDismissRequest = { showMenu = false }
             ) {
+                if (!isInLibrary) {
+                    DropdownMenuItem(
+                        text = { Text("Добавить в Мою музыку") },
+                        onClick = { showMenu = false; onAddToLibrary() }
+                    )
+                } else {
+                    DropdownMenuItem(
+                        text = { Text("Удалить из Моей музыки") },
+                        onClick = { showMenu = false; onDelete() }
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text("Играть следующим") },
                     onClick = { showMenu = false; onPlayNext() }

@@ -19,21 +19,8 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
-class ZvuchPlugin : SourcePlugin {
+class ZvuchPlugin(private val client: HttpClient) : SourcePlugin {
     override val name = "Zvuch"
-
-    private val client = HttpClient(Android) {
-        followRedirects = true
-        install(HttpRequestRetry) {
-            retryOnServerErrors(maxRetries = 2)
-            exponentialDelay()
-        }
-        engine {
-            connectTimeout = 10_000
-            socketTimeout = 15_000
-        }
-    }
-
     private val baseUrl = "https://wwv.zvuch.com"
 
     override suspend fun search(query: String): List<SearchTrack> = withContext(Dispatchers.IO) {
@@ -101,10 +88,11 @@ class ZvuchPlugin : SourcePlugin {
         val artist = element.attr("data-artist").trim().ifBlank {
             element.selectFirst("span.artist")?.text()?.trim() ?: "Unknown"
         }
+
         val title = element.attr("data-title").trim().ifBlank {
             element.selectFirst("span.track")?.text()?.trim() ?: return null
         }
-        val id = element.attr("data-id").ifBlank { title.hashCode().toString() }
+        val id = element.attr("data-id").ifBlank { "${artist}_${title}".hashCode().toString() }
 
         // Обложка приходит прямо с сайта (относительный путь)
         val coverPath = element.attr("data-img").trim()

@@ -23,20 +23,10 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
 class DriveMusicPlugin(
-    private val coverProvider: CoverProvider
+    private val coverProvider: CoverProvider,
+    private val client: HttpClient
 ) : SourcePlugin {
     override val name = "DriveMusic"
-
-    private val client = HttpClient(Android) {
-        install(HttpRequestRetry) {
-            retryOnServerErrors(maxRetries = 3)
-            exponentialDelay()
-        }
-        engine {
-            connectTimeout = 10000
-            socketTimeout = 15000
-        }
-    }
     private val baseUrl = "https://ru.drivemusic.me"
 
     override suspend fun search(query: String): List<SearchTrack> = withContext(Dispatchers.IO) {

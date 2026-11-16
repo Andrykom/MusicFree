@@ -8,6 +8,7 @@ class TrackRepository(private val trackDao: TrackDao) {
     fun getAllTracks(): Flow<List<Track>> = trackDao.getAll()
     fun getDownloadedTracks(): Flow<List<Track>> = trackDao.getDownloaded()
     suspend fun addTrack(track: Track) = trackDao.insert(track)
+    suspend fun ensureTrackExists(track: Track) = trackDao.insertIfAbsent(track)
     suspend fun deleteTrack(track: Track) = trackDao.delete(track)
     suspend fun updateFilePath(id: String, path: String) = trackDao.updateFilePath(id, path)
     suspend fun updateCover(id: String, coverUrl: String) = trackDao.updateCover(id, coverUrl)

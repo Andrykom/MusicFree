@@ -50,7 +50,7 @@ class SearchViewModel(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
 
-    val downloadedIds: StateFlow<Set<String>> = trackRepository.getAllTracks()
+    val libraryIds: StateFlow<Set<String>> = trackRepository.getAllTracks()
         .map { list -> list.map { it.id }.toSet() }
         .stateIn(
             scope = viewModelScope,
@@ -58,6 +58,13 @@ class SearchViewModel(
             initialValue = emptySet()
         )
 
+    val downloadedIds: StateFlow<Set<String>> = trackRepository.getAllTracks()
+        .map { list -> list.filter { it.isDownloaded }.map { it.id }.toSet() }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptySet()
+        )
     private val _selectedPlugin = MutableStateFlow<SourcePlugin?>(null)
     val selectedPlugin: StateFlow<SourcePlugin?> = _selectedPlugin
 
@@ -213,6 +220,21 @@ class SearchViewModel(
         _error.value = null
         if (_uiState.value is SearchUiState.Error) {
             _uiState.value = SearchUiState.Idle
+        }
+    }
+
+    fun addToLibraryOnly(searchTrack: SearchTrack) {
+        val track = Track(
+            id = searchTrack.id,
+            title = searchTrack.title,
+            artist = searchTrack.artist,
+            duration = searchTrack.duration,
+            coverUrl = searchTrack.coverUrl,
+            sourceUrl = searchTrack.audioUrl,
+            isDownloaded = false
+        )
+        viewModelScope.launch {
+            trackRepository.ensureTrackExists(track)
         }
     }
 }

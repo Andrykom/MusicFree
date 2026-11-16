@@ -1,24 +1,51 @@
 package com.mf.musicfree.ui.player
 
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.mf.musicfree.data.model.LyricsLine
 import com.mf.musicfree.player.PlayerViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+
+private fun findActiveLineIndex(lines: List<LyricsLine>, positionMs: Long): Int {
+    if (lines.isEmpty()) return -1
+    // Добавляем упреждение в 350 миллисекунд, чтобы строка подсвечивалась чуть раньше, чем ее начнут петь
+    val adjustedPosition = positionMs + 350L
+    if (adjustedPosition < lines.first().timeMs) return -1
+
+    var low = 0
+    var high = lines.lastIndex
+    var result = -1
+    while (low <= high) {
+        val mid = (low + high) ushr 1
+        if (lines[mid].timeMs <= adjustedPosition) {
+            result = mid
+            low = mid + 1
+        } else {
+            high = mid - 1
+        }
+    }
+    return result
+}
 
 @Composable
 fun LyricsScreen(
@@ -30,23 +57,37 @@ fun LyricsScreen(
 
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    var userScrolling by remember { mutableStateOf(false) }
 
-    // Текущий текст доступен только в состоянии Success
+    // Отслеживаем ручной скролл пользователя, чтобы временно не перехватывать управление
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress) {
+            userScrolling = true
+        } else if (userScrolling) {
+            delay(3000L) // возвращаем автопрокрутку через 3 секунды после того, как пользователь отпустил экран
+            userScrolling = false
+        }
+    }
+
     val safeLyrics = (lyricsState as? PlayerViewModel.LyricsUiState.Success)?.lyrics
 
     val currentLineIndex by remember(safeLyrics, currentPosition) {
         derivedStateOf {
-            safeLyrics?.lines?.indexOfLast { it.timeMs <= currentPosition } ?: -1
+            safeLyrics?.lines?.let { findActiveLineIndex(it, currentPosition) } ?: -1
         }
     }
 
-    LaunchedEffect(currentLineIndex) {
-        val targetIndex = if (currentLineIndex >= 0) currentLineIndex else 0
+    // Плавный скролл к активной строке по центру экрана при смене строки
+    LaunchedEffect(currentLineIndex, userScrolling) {
+        if (!userScrolling && safeLyrics != null && safeLyrics.isSynced && safeLyrics.lines.isNotEmpty()) {
+            val targetIndex = if (currentLineIndex >= 0) currentLineIndex else 0
 
-        // 2. Используем локальный снимок вместо !!
-        if (safeLyrics != null && safeLyrics.lines.isNotEmpty()) {
             scope.launch {
-                listState.animateScrollToItem(index = targetIndex)
+                // Плавная анимация до нужного индекса со смещением вверх для идеального центра
+                listState.animateScrollToItem(
+                    index = targetIndex,
+                    scrollOffset = -320
+                )
             }
         }
     }
@@ -74,13 +115,11 @@ fun LyricsScreen(
             }
             is PlayerViewModel.LyricsUiState.Empty -> {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            "Текст не найден",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text(
+                        "Текст не найден",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
             is PlayerViewModel.LyricsUiState.Error -> {
@@ -103,22 +142,20 @@ fun LyricsScreen(
                 }
             }
             is PlayerViewModel.LyricsUiState.Success -> {
-                // В этой ветке текст гарантированно есть — берём из state, а не из nullable safeLyrics
                 val lyrics = state.lyrics
                 if (lyrics.isSynced) {
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(
-                            top = 350.dp,
-                            bottom = 350.dp,
+                            top = 300.dp,
+                            bottom = 400.dp,
                             start = 24.dp,
                             end = 24.dp
                         ),
                         verticalArrangement = Arrangement.spacedBy(24.dp)
                     ) {
                         itemsIndexed(
-                            // 3. Безопасное обращение к списку без оператора !!
                             items = lyrics.lines,
                             key = { index, _ -> "line_$index" }
                         ) { index, line ->
@@ -128,8 +165,8 @@ fun LyricsScreen(
 
                             val alpha = when {
                                 isCurrent -> 1f
-                                distance == 1 -> 0.6f
-                                distance == 2 -> 0.3f
+                                distance == 1 -> 0.65f
+                                distance == 2 -> 0.35f
                                 else -> 0.15f
                             }
 
@@ -148,12 +185,18 @@ fun LyricsScreen(
                                     MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha)
                                 },
                                 textAlign = TextAlign.Center,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable {
+                                        userScrolling = false
+                                        viewModel.seekToPosition(line.timeMs)
+                                    }
+                                    .padding(vertical = 6.dp, horizontal = 8.dp)
                             )
                         }
                     }
                 } else {
-                    // Статичный текст (Genius) — обычный скролл без подсветки
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(

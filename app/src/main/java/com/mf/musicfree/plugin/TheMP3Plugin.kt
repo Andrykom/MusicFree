@@ -29,21 +29,10 @@ import java.net.IDN
 import java.net.URLEncoder
 
 class TheMP3Plugin(
-    private val coverProvider: CoverProvider
+    private val coverProvider: CoverProvider,
+    private val client: HttpClient
 ) : SourcePlugin {
     override val name = "TheMP3"
-
-    private val client = HttpClient(Android) {
-        followRedirects = true
-        install(HttpRequestRetry) {
-            retryOnServerErrors(maxRetries = 2)
-            exponentialDelay()
-        }
-        engine {
-            connectTimeout = 10000
-            socketTimeout = 15000
-        }
-    }
     private val baseUrl = "https://themp3.info"
 
     override suspend fun search(query: String): List<SearchTrack> = withContext(Dispatchers.IO) {
@@ -80,8 +69,9 @@ class TheMP3Plugin(
             Log.w("TheMP3Plugin", "POST failed: ${e.message}")
         }
 
-        // Сюда доходим, только если все три стратегии кинули исключение
-        throw lastException!!
+        // Сюда доходим, только если все три стратегии не дали результата
+        lastException?.let { throw it }
+        return@withContext emptyList()
     }
 
     private suspend fun enrichWithCovers(tracks: List<SearchTrack>): List<SearchTrack> {
@@ -225,8 +215,15 @@ class TheMP3Plugin(
         val titleElem = element.selectFirst(".playlist-name-title em, .track-title, a[href*=\"/t/\"] em")
         val title = titleElem?.text()?.trim() ?: return null
 
-        val artistElem = element.selectFirst(".playlist-name-artist a, .track-artist, a[href*=\"/artist/\"]")
-        val artist = artistElem?.text()?.trim() ?: "Unknown"
+        val artistElem = element.selectFirst(".playlist-name-artist a, .playlist-name-artist, .track-artist, a[href*=\"/artist/\"]")
+        var artist = artistElem?.text()?.trim().orEmpty()
+        // Если на странице субдомена блок артиста пустой, пробуем достать его из заголовка страницы (h1)
+        if (artist.isBlank()) {
+            val h1 = element.ownerDocument()?.selectFirst("h1")?.text()?.trim().orEmpty()
+            if (h1.isNotBlank() && !h1.equals(title, ignoreCase = true)) {
+                artist = h1
+            }
+        }
 
         val playElem = element.selectFirst("a.playlist-play[data-url], a[data-url]")
         val audioUrl = playElem?.attr("data-url") ?: ""
@@ -246,7 +243,7 @@ class TheMP3Plugin(
         val pageLink = element.selectFirst("a[href*=\"/t/\"]")
         val pageUrl = pageLink?.attr("abs:href") ?: ""
         val trackId = Regex("/t/(\\d+)-").find(pageUrl)?.groupValues?.get(1)
-            ?: title.hashCode().toString()
+            ?: "${artist}_${title}".hashCode().toString()
 
         Log.d("TheMP3Plugin", "🎵 $artist - $title | URL: $finalAudioUrl")
 

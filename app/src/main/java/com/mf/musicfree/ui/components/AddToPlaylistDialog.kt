@@ -46,7 +46,7 @@ fun AddToPlaylistDialog(
                                 modifier = Modifier.clickable {
                                     scope.launch {
                                         if (track != null) {
-                                            trackRepository.addTrack(track)
+                                            trackRepository.ensureTrackExists(track)
                                         }
                                         playlistRepository.addTrackToPlaylist(playlist.id, trackId)
                                         onDismiss()
@@ -79,7 +79,7 @@ fun AddToPlaylistDialog(
                                     val created = all.firstOrNull { it.name == newPlaylistName.trim() }
                                     created?.let {
                                         if (track != null) {
-                                            trackRepository.addTrack(track)
+                                            trackRepository.ensureTrackExists(track)
                                         }
                                         playlistRepository.addTrackToPlaylist(it.id, trackId)
                                     }
