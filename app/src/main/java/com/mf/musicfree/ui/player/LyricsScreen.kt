@@ -54,10 +54,18 @@ fun LyricsScreen(
 ) {
     val lyricsState by viewModel.lyricsState.collectAsState()
     val currentPosition by viewModel.currentPosition.collectAsState()
+    val currentTrack by viewModel.currentTrack.collectAsState()
 
     val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
     var userScrolling by remember { mutableStateOf(false) }
+
+    // Сброс прокрутки при смене трека
+    LaunchedEffect(currentTrack?.id) {
+        userScrolling = false
+        if (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0) {
+            listState.scrollToItem(0)
+        }
+    }
 
     // Отслеживаем ручной скролл пользователя, чтобы временно не перехватывать управление
     LaunchedEffect(listState.isScrollInProgress) {
@@ -81,14 +89,14 @@ fun LyricsScreen(
     LaunchedEffect(currentLineIndex, userScrolling) {
         if (!userScrolling && safeLyrics != null && safeLyrics.isSynced && safeLyrics.lines.isNotEmpty()) {
             val targetIndex = if (currentLineIndex >= 0) currentLineIndex else 0
+            val viewportHeight = listState.layoutInfo.viewportSize.height
+            val scrollOffset = if (viewportHeight > 0) -(viewportHeight / 3) else -320
 
-            scope.launch {
-                // Плавная анимация до нужного индекса со смещением вверх для идеального центра
-                listState.animateScrollToItem(
-                    index = targetIndex,
-                    scrollOffset = -320
-                )
-            }
+            // Плавная анимация до нужного индекса с центрированием
+            listState.animateScrollToItem(
+                index = targetIndex,
+                scrollOffset = scrollOffset
+            )
         }
     }
 

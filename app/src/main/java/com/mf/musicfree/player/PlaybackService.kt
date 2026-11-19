@@ -13,7 +13,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.MediaStyleNotificationHelper
@@ -30,6 +29,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 
@@ -38,8 +38,10 @@ class PlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val trackRepository: TrackRepository by inject()
+    private val playerController: PlayerController by inject()
     private val bitmapCache = LruCache<String, Bitmap>(5)
     private var currentCoverJob: Job? = null
+    private var idleStopJob: Job? = null
 
     companion object {
         const val CHANNEL_ID = "mf_playback_channel"
@@ -48,39 +50,60 @@ class PlaybackService : MediaSessionService() {
         const val ACTION_PREV = "com.mf.musicfree.PREV"
         const val ACTION_PLAY_PAUSE = "com.mf.musicfree.PLAY_PAUSE"
         const val ACTION_NEXT = "com.mf.musicfree.NEXT"
+        private const val IDLE_TIMEOUT_MS = 15 * 60_000L // 15 минут паузы -> закрываем сервис и шторку
     }
 
     override fun onCreate() {
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildEmptyNotification())
 
-        super.onCreate()
-
-        val playerController: PlayerController by inject()
         val player = playerController.getExoPlayer()
-
         mediaSession = MediaSession.Builder(this, player).build()
+        playerController.setServiceRunning(true)
+
+        super.onCreate()
 
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
                 updateNotification(player)
             }
+
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 updateNotification(player)
+                if (isPlaying) {
+                    idleStopJob?.cancel()
+                } else {
+                    scheduleIdleShutdown(player)
+                }
             }
         })
 
         if (player.currentMediaItem != null) {
             updateNotification(player)
         }
+        if (!player.isPlaying) {
+            scheduleIdleShutdown(player)
+        }
+    }
+
+    private fun scheduleIdleShutdown(player: Player) {
+        idleStopJob?.cancel()
+        idleStopJob = serviceScope.launch {
+            delay(IDLE_TIMEOUT_MS)
+            if (!player.isPlaying) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val player = mediaSession?.player
         when (intent?.action) {
-            ACTION_PREV -> player?.seekToPrevious()
-            ACTION_PLAY_PAUSE -> player?.let { it.playWhenReady = !it.playWhenReady }
-            ACTION_NEXT -> player?.seekToNext()
+            ACTION_PREV -> playerController.previous()
+            ACTION_PLAY_PAUSE -> {
+                if (playerController.isPlaying()) playerController.pause() else playerController.play()
+            }
+            ACTION_NEXT -> playerController.next()
             ACTION_ADD_TO_LIBRARY -> serviceScope.launch { addCurrentTrackToLibrary() }
         }
         return super.onStartCommand(intent, flags, startId)
@@ -98,7 +121,7 @@ class PlaybackService : MediaSessionService() {
             isDownloaded = false
         )
         try {
-            trackRepository.addTrack(track)
+            trackRepository.ensureTrackExists(track)
         } catch (_: Exception) {}
     }
 
@@ -118,6 +141,7 @@ class PlaybackService : MediaSessionService() {
                 }
             } catch (_: SecurityException) {
                 // POST_NOTIFICATIONS permission not granted on Android 13+
+            } catch (_: Exception) {
             }
         }
     }
@@ -130,18 +154,26 @@ class PlaybackService : MediaSessionService() {
         val style = mediaSession?.let { MediaStyleNotificationHelper.MediaStyle(it) }
             ?.setShowActionsInCompactView(0, 1, 2)
 
-        val prev = PendingIntent.getService(this, 0,
+        val prev = PendingIntent.getService(
+            this, 0,
             Intent(this, PlaybackService::class.java).apply { action = ACTION_PREV },
-            PendingIntent.FLAG_IMMUTABLE)
-        val playPause = PendingIntent.getService(this, 1,
+            PendingIntent.FLAG_IMMUTABLE
+        )
+        val playPause = PendingIntent.getService(
+            this, 1,
             Intent(this, PlaybackService::class.java).apply { action = ACTION_PLAY_PAUSE },
-            PendingIntent.FLAG_IMMUTABLE)
-        val next = PendingIntent.getService(this, 2,
+            PendingIntent.FLAG_IMMUTABLE
+        )
+        val next = PendingIntent.getService(
+            this, 2,
             Intent(this, PlaybackService::class.java).apply { action = ACTION_NEXT },
-            PendingIntent.FLAG_IMMUTABLE)
-        val add = PendingIntent.getService(this, 3,
+            PendingIntent.FLAG_IMMUTABLE
+        )
+        val add = PendingIntent.getService(
+            this, 3,
             Intent(this, PlaybackService::class.java).apply { action = ACTION_ADD_TO_LIBRARY },
-            PendingIntent.FLAG_IMMUTABLE)
+            PendingIntent.FLAG_IMMUTABLE
+        )
 
         val isPlaying = player.isPlaying
         val playPauseIcon = if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
@@ -179,16 +211,21 @@ class PlaybackService : MediaSessionService() {
             .setLargeIcon(largeIcon)
             .setContentTitle(title)
             .setContentText(artist)
-            .setContentIntent(PendingIntent.getActivity(this, 0,
-                Intent(this, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-                }, PendingIntent.FLAG_IMMUTABLE))
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    this, 0,
+                    Intent(this, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    },
+                    PendingIntent.FLAG_IMMUTABLE
+                )
+            )
             .addAction(android.R.drawable.ic_media_previous, "Назад", prev)
             .addAction(playPauseIcon, if (isPlaying) "Пауза" else "Играть", playPause)
             .addAction(android.R.drawable.ic_media_next, "Вперёд", next)
             .addAction(android.R.drawable.ic_input_add, "В библиотеку", add)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setOngoing(true)
+            .setOngoing(isPlaying)
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
             .build()
@@ -199,7 +236,7 @@ class PlaybackService : MediaSessionService() {
             .setContentTitle("Music Free")
             .setContentText("Готов к воспроизведению")
             .setSmallIcon(R.drawable.mf_icon_white)
-            .setOngoing(true)
+            .setOngoing(false)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
@@ -225,17 +262,18 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // Не убиваем сервис на паузе — пользователь может вернуться и нажать play.
-        // Останавливаем только когда воспроизведение реально закончено.
-        val player = mediaSession?.player ?: return
-        if (player.playbackState == Player.STATE_ENDED) {
+        val player = mediaSession?.player
+        if (player == null || !player.isPlaying) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
     }
 
     override fun onDestroy() {
+        idleStopJob?.cancel()
         currentCoverJob?.cancel()
         serviceScope.cancel()
+        playerController.setServiceRunning(false)
         mediaSession?.run {
             release()
             mediaSession = null

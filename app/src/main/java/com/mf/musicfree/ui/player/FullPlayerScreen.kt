@@ -16,8 +16,11 @@ import androidx.compose.material.icons.automirrored.filled.Subject
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
@@ -53,7 +56,9 @@ fun FullPlayerScreen(
     val isPlaying by viewModel.isPlaying.collectAsState()
     val repeatMode by viewModel.repeatMode.collectAsState()
     val isShuffled by viewModel.isShuffled.collectAsState()
-    val isSaved by viewModel.isCurrentTrackSaved.collectAsState()
+    val isInLibrary by viewModel.isCurrentTrackInLibrary.collectAsState()
+    val isDownloaded by viewModel.isCurrentTrackDownloaded.collectAsState()
+    val downloadProgress by viewModel.downloadProgress.collectAsState()
 
     val isRadioMode by viewModel.isRadioMode.collectAsState()
     val isRadioBuffering by viewModel.isRadioBuffering.collectAsState()
@@ -236,48 +241,96 @@ fun FullPlayerScreen(
                     }
 
                     // Ряд дополнительных действий
+                    val currentDownloadProgress = track.let { downloadProgress[it.id] }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = {
-                            if (isSaved) viewModel.deleteCurrentTrack() else viewModel.saveCurrentTrack()
-                        }) {
+                        // В Мою музыку
+                        IconButton(onClick = { viewModel.toggleCurrentTrackInLibrary() }) {
                             Icon(
-                                imageVector = if (isSaved) Icons.Default.Delete else Icons.Default.Download,
-                                contentDescription = if (isSaved) "Удалить" else "Скачать",
-                                modifier = Modifier.size(28.dp)
+                                imageVector = if (isInLibrary) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                contentDescription = if (isInLibrary) "В Моей музыке" else "В библиотеку",
+                                tint = if (isInLibrary) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(26.dp)
                             )
                         }
+
+                        // Скачать офлайн
+                        if (currentDownloadProgress != null) {
+                            Box(
+                                modifier = Modifier.size(48.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (currentDownloadProgress >= 0) {
+                                    CircularProgressIndicator(
+                                        progress = { currentDownloadProgress / 100f },
+                                        modifier = Modifier.size(24.dp),
+                                        strokeWidth = 2.5.dp
+                                    )
+                                } else {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp),
+                                        strokeWidth = 2.5.dp
+                                    )
+                                }
+                            }
+                        } else if (isDownloaded) {
+                            IconButton(onClick = { viewModel.deleteDownloadedFileForCurrentTrack() }) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = "Скачано (нажмите, чтобы удалить файл)",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(26.dp)
+                                )
+                            }
+                        } else {
+                            IconButton(onClick = { viewModel.downloadCurrentTrack() }) {
+                                Icon(
+                                    imageVector = Icons.Default.Download,
+                                    contentDescription = "Скачать",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(26.dp)
+                                )
+                            }
+                        }
+
+                        // В плейлист
                         IconButton(onClick = { showAddToPlaylist = true }) {
                             Icon(
                                 imageVector = Icons.Default.Add,
                                 contentDescription = "В плейлист",
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(26.dp)
                             )
                         }
+
+                        // Моя Волна
                         IconButton(onClick = { viewModel.toggleRadioMode() }) {
                             Icon(
                                 imageVector = Icons.Default.AutoAwesome,
                                 contentDescription = "Моя Волна",
                                 tint = if (isRadioMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(26.dp)
                             )
                         }
+
+                        // Заблокировать артиста
                         IconButton(onClick = { viewModel.toggleBlockCurrentArtist() }) {
                             Icon(
                                 imageVector = Icons.Default.Block,
                                 contentDescription = if (isArtistBlocked) "Разблокировать" else "Заблокировать артиста",
                                 tint = if (isArtistBlocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(26.dp)
                             )
                         }
+
+                        // Текст песни
                         IconButton(onClick = onLyrics) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.Subject,
                                 contentDescription = "Текст песни",
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(26.dp)
                             )
                         }
                     }

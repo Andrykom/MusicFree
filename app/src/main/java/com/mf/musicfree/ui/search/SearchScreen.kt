@@ -12,9 +12,12 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -52,6 +55,7 @@ fun SearchScreen(
     val selectedPlugin by viewModel.selectedPlugin.collectAsState()
     val currentTrack by playerViewModel.currentTrack.collectAsState()
     val libraryIds by viewModel.libraryIds.collectAsState()
+    val downloadProgress by viewModel.downloadProgress.collectAsState()
 
     val context = LocalContext.current
     val plugins = remember { pluginManager.plugins }
@@ -245,10 +249,12 @@ fun SearchScreen(
                 is SearchUiState.Success -> {
                     itemsIndexed(results, key = { _, item -> item.id }) { index, track ->
                         val isCurrent = track.id == currentTrack?.id
+                        val prog = downloadProgress[track.id]
 
                         SearchResultItem(
                             track = track,
                             isDownloaded = track.id in downloadedIds,
+                            downloadProgress = prog,
                             isInLibrary = track.id in libraryIds,
                             isCurrent = isCurrent,
                             onClick = {
@@ -267,11 +273,21 @@ fun SearchScreen(
                                     )
                                 }
                             },
-                            onAddToLibrary = {
-                                viewModel.addToLibraryOnly(track)
+                            onToggleLibrary = {
+                                val inLib = track.id in libraryIds
+                                viewModel.toggleLibrary(track, inLib)
                                 scope.launch {
                                     snackbarHostState.showSnackbar(
-                                        "«${track.title}» добавлен в Мою музыку",
+                                        if (inLib) "«${track.title}» удален из Моей музыки" else "«${track.title}» добавлен в Мою музыку",
+                                        duration = SnackbarDuration.Short
+                                    )
+                                }
+                            },
+                            onDeleteDownloadedFile = {
+                                viewModel.deleteDownloadedFile(track)
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        "Скачанный файл «${track.title}» удален",
                                         duration = SnackbarDuration.Short
                                     )
                                 }
@@ -280,7 +296,7 @@ fun SearchScreen(
                                 viewModel.deleteTrack(track)
                                 scope.launch {
                                     snackbarHostState.showSnackbar(
-                                        "«${track.title}» удален из библиотеки",
+                                        "«${track.title}» удален",
                                         duration = SnackbarDuration.Short
                                     )
                                 }
@@ -306,11 +322,13 @@ fun SearchScreen(
 fun SearchResultItem(
     track: SearchTrack,
     isDownloaded: Boolean,
+    downloadProgress: Int? = null,
     isInLibrary: Boolean = false,
     isCurrent: Boolean,
     onClick: () -> Unit,
     onDownload: () -> Unit,
-    onAddToLibrary: () -> Unit = {},
+    onToggleLibrary: () -> Unit = {},
+    onDeleteDownloadedFile: () -> Unit = {},
     onDelete: () -> Unit = {},
     onPlayNext: () -> Unit = {},
     onAddToQueue: () -> Unit = {}
@@ -330,59 +348,98 @@ fun SearchResultItem(
                 .background(bgColor)
                 .combinedClickable(onClick = onClick, onLongClick = { showMenu = true })
                 .padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        TrackCover(
-            coverUrl = track.coverUrl,
-            title = track.title,
-            modifier = Modifier.size(48.dp)
-        )
-
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.Center
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(
-                text = track.title,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+            TrackCover(
+                coverUrl = track.coverUrl,
+                title = track.title,
+                modifier = Modifier.size(48.dp)
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.Center
+            ) {
                 Text(
-                    text = track.artist,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (isCurrent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
+                    text = track.title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                 )
-                track.quality?.let {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        text = "• $it",
+                        text = track.artist,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
+                        color = if (isCurrent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1
                     )
-                }
-                track.durationText?.let {
-                    Text(
-                        text = "• $it",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        maxLines = 1
-                    )
+                    track.quality?.let {
+                        Text(
+                            text = "• $it",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            maxLines = 1
+                        )
+                    }
+                    track.durationText?.let {
+                        Text(
+                            text = "• $it",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            maxLines = 1
+                        )
+                    }
                 }
             }
-        }
 
-            if (isDownloaded) {
-                IconButton(onClick = onDelete) {
-                    Icon(Icons.Default.Delete, "Удалить", tint = MaterialTheme.colorScheme.primary)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onToggleLibrary) {
+                    Icon(
+                        imageVector = if (isInLibrary) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = if (isInLibrary) "В Моей музыке" else "В библиотеку",
+                        tint = if (isInLibrary) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp)
+                    )
                 }
-            } else {
-                IconButton(onClick = onDownload) {
-                    Icon(Icons.Default.Download, "Скачать")
+
+                if (downloadProgress != null) {
+                    Box(
+                        modifier = Modifier.size(40.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (downloadProgress >= 0) {
+                            CircularProgressIndicator(
+                                progress = { downloadProgress / 100f },
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.5.dp
+                            )
+                        } else {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.5.dp
+                            )
+                        }
+                    }
+                } else if (isDownloaded) {
+                    IconButton(onClick = onDeleteDownloadedFile) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Скачано (нажмите для удаления файла)",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                } else {
+                    IconButton(onClick = onDownload) {
+                        Icon(
+                            imageVector = Icons.Default.Download,
+                            contentDescription = "Скачать",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
             }
         }
@@ -394,12 +451,12 @@ fun SearchResultItem(
                 if (!isInLibrary) {
                     DropdownMenuItem(
                         text = { Text("Добавить в Мою музыку") },
-                        onClick = { showMenu = false; onAddToLibrary() }
+                        onClick = { showMenu = false; onToggleLibrary() }
                     )
                 } else {
                     DropdownMenuItem(
                         text = { Text("Удалить из Моей музыки") },
-                        onClick = { showMenu = false; onDelete() }
+                        onClick = { showMenu = false; onToggleLibrary() }
                     )
                 }
                 DropdownMenuItem(

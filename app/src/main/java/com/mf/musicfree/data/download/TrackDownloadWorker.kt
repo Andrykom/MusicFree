@@ -33,22 +33,40 @@ class TrackDownloadWorker(
     override suspend fun doWork(): Result {
         val trackId = inputData.getString(KEY_TRACK_ID) ?: return Result.failure()
         val audioUrl = inputData.getString(KEY_AUDIO_URL) ?: return Result.failure()
-        val fileName = inputData.getString(KEY_FILE_NAME) ?: "$trackId.mp3"
+        val rawFileName = inputData.getString(KEY_FILE_NAME) ?: "$trackId.mp3"
+        val safeFileName = rawFileName.replace(Regex("""[\\/:*?"<>|]"""), "_")
+
+        val musicDir = File(applicationContext.filesDir, "music").apply { mkdirs() }
+        val outputFile = File(musicDir, safeFileName)
 
         return try {
-            val musicDir = File(applicationContext.filesDir, "music").apply { mkdirs() }
-            val outputFile = File(musicDir, fileName)
-
             HttpClient(Android).use { client ->
-                val response: HttpResponse = client.get(audioUrl)
+                val response: HttpResponse = client.get(audioUrl) {
+                    header(
+                        HttpHeaders.UserAgent,
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                    )
+                    header(HttpHeaders.Accept, "*/*")
+                    val referer = when {
+                        audioUrl.contains("zvuch", ignoreCase = true) -> "https://wwv.zvuch.com/"
+                        audioUrl.contains("themp3", ignoreCase = true) ||
+                                audioUrl.contains("sunproxy", ignoreCase = true) -> "https://themp3.info/"
+                        audioUrl.contains("drivemusic", ignoreCase = true) -> "https://ru.drivemusic.me/"
+                        else -> null
+                    }
+                    if (referer != null) {
+                        header(HttpHeaders.Referrer, referer)
+                    }
+                }
 
                 if (!response.status.isSuccess()) {
-                    return Result.failure(workDataOf("error" to "HTTP ${response.status}"))
+                    return Result.failure(workDataOf("error" to "HTTP ${response.status.value}"))
                 }
 
                 val total = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: -1L
                 var downloaded = 0L
                 var lastProgress = -1
+                var lastIndeterminateBytes = 0L
 
                 val channel: ByteReadChannel = response.bodyAsChannel()
                 outputFile.outputStream().use { fileStream ->
@@ -64,10 +82,9 @@ class TrackDownloadWorker(
                                     lastProgress = progress
                                     setProgress(workDataOf(KEY_PROGRESS to progress))
                                 }
-                            } else {
-                                if (downloaded % (64 * 1024) == 0L) {
-                                    setProgress(workDataOf(KEY_PROGRESS to -1))
-                                }
+                            } else if (downloaded - lastIndeterminateBytes >= 64 * 1024) {
+                                lastIndeterminateBytes = downloaded
+                                setProgress(workDataOf(KEY_PROGRESS to -1))
                             }
                         }
                     }
@@ -84,7 +101,8 @@ class TrackDownloadWorker(
                 )
             )
         } catch (e: Exception) {
-            Result.failure(workDataOf("error" to e.message))
+            try { outputFile.delete() } catch (_: Exception) {}
+            Result.failure(workDataOf("error" to (e.message ?: "Ошибка загрузки")))
         }
     }
 }

@@ -11,6 +11,7 @@ class TrackRepository(private val trackDao: TrackDao) {
     suspend fun ensureTrackExists(track: Track) = trackDao.insertIfAbsent(track)
     suspend fun deleteTrack(track: Track) = trackDao.delete(track)
     suspend fun updateFilePath(id: String, path: String) = trackDao.updateFilePath(id, path)
+    suspend fun clearDownloaded(id: String) = trackDao.clearDownloaded(id)
     suspend fun updateCover(id: String, coverUrl: String) = trackDao.updateCover(id, coverUrl)
 
     suspend fun exists(id: String): Boolean = trackDao.exists(id)

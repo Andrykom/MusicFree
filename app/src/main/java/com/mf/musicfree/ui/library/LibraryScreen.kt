@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
@@ -19,6 +20,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -41,8 +43,36 @@ fun LibraryScreen(
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Треки", "Плейлисты")
+    val searchQuery by viewModel.searchQuery.collectAsState()
 
     Column(modifier = Modifier.fillMaxSize()) {
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { viewModel.onSearchQueryChange(it) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            placeholder = { Text("Поиск по названию или артисту...") },
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Поиск"
+                )
+            },
+            trailingIcon = if (searchQuery.isNotEmpty()) {
+                {
+                    IconButton(onClick = { viewModel.clearSearchQuery() }) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Очистить"
+                        )
+                    }
+                }
+            } else null,
+            singleLine = true,
+            shape = MaterialTheme.shapes.medium
+        )
+
         TabRow(selectedTabIndex = selectedTab) {
             tabs.forEachIndexed { index, title ->
                 Tab(
@@ -65,7 +95,9 @@ private fun TracksTab(
     playerViewModel: PlayerViewModel,
     viewModel: LibraryViewModel
 ) {
-    val tracks by viewModel.tracks.collectAsState()
+    val tracks by viewModel.filteredTracks.collectAsState()
+    val allTracks by viewModel.tracks.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsState()
     val currentTrack by playerViewModel.currentTrack.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val downloadFailed by viewModel.downloadFailed.collectAsState()
@@ -84,8 +116,13 @@ private fun TracksTab(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
+                val emptyMessage = if (searchQuery.isNotBlank()) {
+                    "Ничего не найдено по запросу «$searchQuery»"
+                } else {
+                    "Пока нет треков.\nСкачай что-нибудь во вкладке Поиск!"
+                }
                 Text(
-                    "Пока нет треков.\nСкачай что-нибудь во вкладке Поиск!",
+                    emptyMessage,
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
@@ -146,7 +183,9 @@ private fun PlaylistsTab(
     viewModel: LibraryViewModel,
     onNavigate: (String) -> Unit
 ) {
-    val playlists by viewModel.playlists.collectAsState()
+    val playlists by viewModel.filteredPlaylists.collectAsState()
+    val allPlaylists by viewModel.playlists.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsState()
     val deviceTracksCount by viewModel.deviceTracksCount.collectAsState()
     var showCreateDialog by remember { mutableStateOf(false) }
 
@@ -159,51 +198,57 @@ private fun PlaylistsTab(
             contentPadding = PaddingValues(vertical = 8.dp)
         ) {
             // Закрепленный специальный плейлист "Музыка с устройства"
-            item(key = "device_tracks_pinned") {
-                ListItem(
-                    modifier = Modifier.clickable { onNavigate("playlist_detail/device") },
-                    headlineContent = {
-                        Text(
-                            "Музыка с устройства",
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                    },
-                    supportingContent = {
-                        val countText = if (deviceTracksCount > 0) {
-                            "$deviceTracksCount ${trackCountString(deviceTracksCount)}"
-                        } else {
-                            "Локальные треки"
-                        }
-                        Text(
-                            countText,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    },
-                    leadingContent = {
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .background(
-                                    MaterialTheme.colorScheme.secondaryContainer,
-                                    shape = MaterialTheme.shapes.medium
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.PhoneAndroid,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSecondaryContainer
+            val showDevicePlaylist = searchQuery.isBlank() ||
+                "музыка с устройства".contains(searchQuery.trim().lowercase()) ||
+                "локальные".contains(searchQuery.trim().lowercase())
+
+            if (showDevicePlaylist) {
+                item(key = "device_tracks_pinned") {
+                    ListItem(
+                        modifier = Modifier.clickable { onNavigate("playlist_detail/device") },
+                        headlineContent = {
+                            Text(
+                                "Музыка с устройства",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.titleMedium
                             )
+                        },
+                        supportingContent = {
+                            val countText = if (deviceTracksCount > 0) {
+                                "$deviceTracksCount ${trackCountString(deviceTracksCount)}"
+                            } else {
+                                "Локальные треки"
+                            }
+                            Text(
+                                countText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        leadingContent = {
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .background(
+                                        MaterialTheme.colorScheme.secondaryContainer,
+                                        shape = MaterialTheme.shapes.medium
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PhoneAndroid,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            }
                         }
-                    }
-                )
-                HorizontalDivider(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                    thickness = 0.5.dp
-                )
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        thickness = 0.5.dp
+                    )
+                }
             }
 
             if (playlists.isEmpty()) {
@@ -214,8 +259,13 @@ private fun PlaylistsTab(
                             .padding(top = 40.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
+                        val emptyText = if (searchQuery.isNotBlank()) {
+                            "Ничего не найдено по запросу «$searchQuery»"
+                        } else {
+                            "Нет созданных плейлистов"
+                        }
                         Text(
-                            "Нет созданных плейлистов",
+                            emptyText,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodyMedium
                         )

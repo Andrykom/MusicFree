@@ -110,10 +110,11 @@ val appModule = module {
     single { DeviceTracksRepository(androidContext()) }
     single { PlaylistWebExtractor() }
     single { MusicImportService(get(), get(), get()) }
+    single { com.mf.musicfree.data.download.DownloadManager(get(), get()) }
 
-    viewModel { PlayerViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
-    viewModel { SearchViewModel(get(), get(), get(), get(), get()) }
-    viewModel { LibraryViewModel(get(), get(), get(), get(), get()) }
+    viewModel { PlayerViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), getOrNull()) }
+    viewModel { SearchViewModel(get(), get(), get(), get(), get(), getOrNull()) }
+    viewModel { LibraryViewModel(get(), get(), get(), get(), get(), getOrNull()) }
     viewModel { (playlistId: String) ->
         PlaylistDetailViewModel(playlistId, get(), get())
     }

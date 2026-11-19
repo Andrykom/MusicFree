@@ -21,6 +21,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -37,6 +38,7 @@ fun QueueBottomSheet(
 ) {
     val queue by viewModel.queue.collectAsState()
     val currentIndex by viewModel.currentIndex.collectAsState()
+    val currentTrack by viewModel.currentTrack.collectAsState()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val listState = rememberLazyListState()
     val density = LocalDensity.current
@@ -84,6 +86,14 @@ fun QueueBottomSheet(
         } ?: return
 
         val toIndex = targetItem.index
+
+        // Блокируем перемещение через текущий играющий трек, чтобы перетаскиваемый трек не пересекал активный
+        if ((fromIndex < currentPlayingIndex && toIndex >= currentPlayingIndex) ||
+            (fromIndex > currentPlayingIndex && toIndex <= currentPlayingIndex)
+        ) {
+            return
+        }
+
         val anchorIdx = listState.firstVisibleItemIndex
         val anchorOffset = listState.firstVisibleItemScrollOffset
 
@@ -220,8 +230,21 @@ fun QueueBottomSheet(
                         key = { index, t -> itemKeys.getOrElse(index) { t.id } }
                     ) { index, track ->
                         val itemKey = itemKeys.getOrElse(index) { track.id }
-                        val isCurrent = index == currentIndex
                         val isDragging = draggingTrackKey == itemKey
+                        val isCurrent = (track.id == currentTrack?.id) && !isDragging
+                        val latestIndex by rememberUpdatedState(index)
+                        val latestIsCurrent by rememberUpdatedState(isCurrent)
+
+                        val swipeState = rememberSwipeToDismissBoxState(
+                            confirmValueChange = { value ->
+                                if (!latestIsCurrent && draggingTrackKey == null && value == SwipeToDismissBoxValue.EndToStart) {
+                                    viewModel.removeFromQueue(latestIndex)
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                        )
 
                         SwipeToDismissBox(
                             modifier = Modifier
@@ -242,30 +265,23 @@ fun QueueBottomSheet(
                                 },
                             enableDismissFromStartToEnd = false,
                             enableDismissFromEndToStart = !isCurrent && draggingTrackKey == null,
-                            state = rememberSwipeToDismissBoxState(
-                                confirmValueChange = { value ->
-                                    if (!isCurrent && draggingTrackKey == null && value == SwipeToDismissBoxValue.EndToStart) {
-                                        viewModel.removeFromQueue(index)
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                }
-                            ),
+                            state = swipeState,
                             backgroundContent = {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(MaterialTheme.colorScheme.errorContainer)
-                                        .padding(horizontal = 20.dp),
-                                    contentAlignment = Alignment.CenterEnd
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Delete,
-                                        contentDescription = "Удалить из очереди",
-                                        tint = MaterialTheme.colorScheme.onErrorContainer
-                                    )
+                                if (swipeState.dismissDirection == SwipeToDismissBoxValue.EndToStart) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(MaterialTheme.colorScheme.errorContainer)
+                                            .padding(horizontal = 20.dp),
+                                        contentAlignment = Alignment.CenterEnd
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "Удалить из очереди",
+                                            tint = MaterialTheme.colorScheme.onErrorContainer
+                                        )
+                                    }
                                 }
                             }
                         ) {
@@ -314,7 +330,9 @@ fun QueueBottomSheet(
                                 colors = ListItemDefaults.colors(
                                     containerColor = when {
                                         isDragging -> MaterialTheme.colorScheme.surfaceVariant
-                                        isCurrent -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                                        isCurrent -> MaterialTheme.colorScheme.primaryContainer
+                                            .copy(alpha = 0.35f)
+                                            .compositeOver(MaterialTheme.colorScheme.surface)
                                         else -> MaterialTheme.colorScheme.surface
                                     }
                                 )

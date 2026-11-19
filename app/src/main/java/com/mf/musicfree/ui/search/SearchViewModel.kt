@@ -32,7 +32,8 @@ class SearchViewModel(
     private val trackRepository: TrackRepository,
     private val workManager: WorkManager,
     private val playerController: com.mf.musicfree.player.PlayerController? = null,
-    private val settingsRepository: com.mf.musicfree.data.preferences.SettingsRepository? = null
+    private val settingsRepository: com.mf.musicfree.data.preferences.SettingsRepository? = null,
+    private val downloadManager: com.mf.musicfree.data.download.DownloadManager? = null
 ) : ViewModel() {
 
     private val _query = MutableStateFlow("")
@@ -49,6 +50,12 @@ class SearchViewModel(
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
+
+    val downloadProgress: StateFlow<Map<String, Int>> = downloadManager?.downloadProgress
+        ?: MutableStateFlow(emptyMap())
+
+    val downloadFailed: StateFlow<Set<String>> = downloadManager?.downloadFailed
+        ?: MutableStateFlow(emptySet())
 
     val libraryIds: StateFlow<Set<String>> = trackRepository.getAllTracks()
         .map { list -> list.map { it.id }.toSet() }
@@ -79,6 +86,13 @@ class SearchViewModel(
                             _selectedPlugin.value = plugin
                         }
                     }
+                }
+            }
+        }
+        downloadManager?.let { dm ->
+            viewModelScope.launch {
+                dm.downloadErrorEvents.collect { errorMsg ->
+                    _error.value = errorMsg
                 }
             }
         }
@@ -170,28 +184,51 @@ class SearchViewModel(
             sourceUrl = searchTrack.audioUrl,
             isDownloaded = false
         )
+        if (downloadManager != null) {
+            downloadManager.downloadTrack(track)
+        } else {
+            viewModelScope.launch {
+                try {
+                    trackRepository.addTrack(track)
+
+                    val inputData = Data.Builder()
+                        .putString(TrackDownloadWorker.KEY_TRACK_ID, searchTrack.id)
+                        .putString(TrackDownloadWorker.KEY_AUDIO_URL, searchTrack.audioUrl ?: "")
+                        .putString(
+                            TrackDownloadWorker.KEY_FILE_NAME,
+                            "${searchTrack.artist} - ${searchTrack.title}.mp3"
+                        )
+                        .build()
+
+                    val downloadWork = OneTimeWorkRequestBuilder<TrackDownloadWorker>()
+                        .setInputData(inputData)
+                        .addTag("track_download")
+                        .addTag(searchTrack.id)
+                        .build()
+
+                    workManager.enqueueUniqueWork(searchTrack.id, androidx.work.ExistingWorkPolicy.KEEP, downloadWork)
+                } catch (e: Exception) {
+                    _error.value = "Не удалось добавить трек: ${e.message}"
+                }
+            }
+        }
+    }
+
+    fun deleteDownloadedFile(searchTrack: SearchTrack) {
         viewModelScope.launch {
             try {
-                trackRepository.addTrack(track)
-
-                val inputData = Data.Builder()
-                    .putString(TrackDownloadWorker.KEY_TRACK_ID, searchTrack.id)
-                    .putString(TrackDownloadWorker.KEY_AUDIO_URL, searchTrack.audioUrl ?: "")
-                    .putString(
-                        TrackDownloadWorker.KEY_FILE_NAME,
-                        "${searchTrack.artist} - ${searchTrack.title}.mp3"
-                    )
-                    .build()
-
-                val downloadWork = OneTimeWorkRequestBuilder<TrackDownloadWorker>()
-                    .setInputData(inputData)
-                    .addTag("track_download")
-                    .addTag(searchTrack.id)
-                    .build()
-
-                workManager.enqueueUniqueWork(searchTrack.id, androidx.work.ExistingWorkPolicy.KEEP, downloadWork)
+                val existing = trackRepository.getTrackById(searchTrack.id)
+                if (downloadManager != null) {
+                    downloadManager.cancelOrDeleteDownload(searchTrack.id, existing?.filePath)
+                } else {
+                    workManager.cancelUniqueWork(searchTrack.id)
+                    existing?.filePath?.let { path ->
+                        try { java.io.File(path).delete() } catch (_: Exception) {}
+                    }
+                }
+                trackRepository.clearDownloaded(searchTrack.id)
             } catch (e: Exception) {
-                _error.value = "Не удалось добавить трек: ${e.message}"
+                _error.value = "Не удалось удалить файл: ${e.message}"
             }
         }
     }
@@ -199,12 +236,18 @@ class SearchViewModel(
     fun deleteTrack(searchTrack: SearchTrack) {
         viewModelScope.launch {
             try {
-                workManager.cancelUniqueWork(searchTrack.id)
-                val existing = trackRepository.getTrackById(searchTrack.id)
-                existing?.filePath?.let { path ->
-                    try { java.io.File(path).delete() } catch (_: Exception) {}
+                if (downloadManager != null) {
+                    val existing = trackRepository.getTrackById(searchTrack.id)
+                    downloadManager.cancelOrDeleteDownload(searchTrack.id, existing?.filePath)
+                } else {
+                    workManager.cancelUniqueWork(searchTrack.id)
+                    val existing = trackRepository.getTrackById(searchTrack.id)
+                    existing?.filePath?.let { path ->
+                        try { java.io.File(path).delete() } catch (_: Exception) {}
+                    }
                 }
                 try { playerController?.removeById(searchTrack.id) } catch (_: Exception) {}
+                val existing = trackRepository.getTrackById(searchTrack.id)
                 if (existing != null) {
                     trackRepository.deleteTrack(existing)
                 } else {
@@ -235,6 +278,32 @@ class SearchViewModel(
         )
         viewModelScope.launch {
             trackRepository.ensureTrackExists(track)
+        }
+    }
+
+    fun removeFromLibraryOnly(searchTrack: SearchTrack) {
+        viewModelScope.launch {
+            try {
+                val existing = trackRepository.getTrackById(searchTrack.id)
+                if (existing != null) {
+                    if (existing.isDownloaded) {
+                        downloadManager?.cancelOrDeleteDownload(searchTrack.id, existing.filePath)
+                    }
+                    trackRepository.deleteTrack(existing)
+                } else {
+                    trackRepository.deleteById(searchTrack.id)
+                }
+            } catch (e: Exception) {
+                _error.value = "Не удалось удалить из Моей музыки: ${e.message}"
+            }
+        }
+    }
+
+    fun toggleLibrary(searchTrack: SearchTrack, isInLibrary: Boolean) {
+        if (isInLibrary) {
+            removeFromLibraryOnly(searchTrack)
+        } else {
+            addToLibraryOnly(searchTrack)
         }
     }
 }

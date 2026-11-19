@@ -4,18 +4,18 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import com.mf.musicfree.data.model.Track
 import kotlinx.coroutines.*
-import androidx.annotation.OptIn
-import androidx.media3.common.util.UnstableApi
 
 class PlayerController(private val context: Context) {
-    private lateinit var exoPlayer: ExoPlayer
+    private var exoPlayer: ExoPlayer? = null
     private var onTrackChange: ((Int) -> Unit)? = null
     private var onIsPlayingChange: ((Boolean) -> Unit)? = null
     private var onPlayerError: ((PlaybackException) -> Unit)? = null
@@ -27,51 +27,116 @@ class PlayerController(private val context: Context) {
     private var savedIsShuffled: Boolean = false
     private var savedIsRadioMode: Boolean = false
 
+    private var isServiceRunning: Boolean = false
+    private var lastPauseTimestampMs: Long = 0L
+    private var pendingStartIndex: Int = 0
+    private var pendingStartPositionMs: Long = 0L
+
     private var crossfadeSeconds: Int = 0
     private var fadeJob: Job? = null
     private val controllerScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
+    companion object {
+        // Если плеер стоял на паузе дольше 3 минут, при нажатии Play пересоздаём ExoPlayer,
+        // чтобы избежать зависших декодеров/сокетов после Doze-режима Android
+        private const val STALE_PLAYER_THRESHOLD_MS = 3 * 60_000L
+    }
+
+    fun setServiceRunning(running: Boolean) {
+        isServiceRunning = running
+        if (!running && exoPlayer != null) {
+            // Записываем актуальную позицию перед тем, как сервис умрёт
+            val p = exoPlayer!!
+            if (trackQueue.isNotEmpty()) {
+                pendingStartIndex = p.currentMediaItemIndex.coerceIn(0, trackQueue.lastIndex)
+                pendingStartPositionMs = p.currentPosition.coerceAtLeast(0L)
+            }
+            lastPauseTimestampMs = System.currentTimeMillis()
+        }
+    }
+
     fun init(player: ExoPlayer) {
-        if (::exoPlayer.isInitialized && exoPlayer != player) {
-            exoPlayer.release()
+        if (exoPlayer != null && exoPlayer !== player) {
+            try { exoPlayer?.release() } catch (_: Exception) {}
         }
         exoPlayer = player
-        exoPlayer.addListener(object : Player.Listener {
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                if (!isCrossfading && ::exoPlayer.isInitialized) {
-                    exoPlayer.volume = 1.0f
-                }
-                onTrackChange?.invoke(exoPlayer.currentMediaItemIndex)
-            }
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                onIsPlayingChange?.invoke(isPlaying)
-            }
-            override fun onPlayerError(error: PlaybackException) {
-                onPlayerError?.invoke(error)
-            }
-        })
-        // Если ViewModel уже подписалась до создания плеера (пересоздание Activity),
-        // сразу прокидываем текущее состояние
+        attachPlayerListeners(player)
+        applySavedModesToPlayer(player)
+
         if (onTrackChange != null && trackQueue.isNotEmpty()) {
-            onTrackChange?.invoke(exoPlayer.currentMediaItemIndex)
+            onTrackChange?.invoke(player.currentMediaItemIndex)
         }
         if (onIsPlayingChange != null) {
-            onIsPlayingChange?.invoke(exoPlayer.isPlaying)
+            onIsPlayingChange?.invoke(player.isPlaying)
         }
         onQueueChange?.invoke(trackQueue)
     }
 
-    fun isInitialized(): Boolean = ::exoPlayer.isInitialized
+    private fun attachPlayerListeners(player: ExoPlayer) {
+        player.addListener(object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                if (!isCrossfading) {
+                    player.volume = 1.0f
+                }
+                val idx = player.currentMediaItemIndex
+                if (idx in trackQueue.indices) {
+                    pendingStartIndex = idx
+                    pendingStartPositionMs = 0L
+                }
+                onTrackChange?.invoke(idx)
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (!isPlaying) {
+                    lastPauseTimestampMs = System.currentTimeMillis()
+                    if (trackQueue.isNotEmpty()) {
+                        pendingStartIndex = player.currentMediaItemIndex.coerceIn(0, trackQueue.lastIndex)
+                        pendingStartPositionMs = player.currentPosition.coerceAtLeast(0L)
+                    }
+                } else {
+                    lastPauseTimestampMs = 0L
+                }
+                onIsPlayingChange?.invoke(isPlaying)
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                if (trackQueue.isNotEmpty()) {
+                    pendingStartIndex = player.currentMediaItemIndex.coerceIn(0, trackQueue.lastIndex)
+                    pendingStartPositionMs = player.currentPosition.coerceAtLeast(0L)
+                }
+                onPlayerError?.invoke(error)
+            }
+        })
+    }
+
+    private fun applySavedModesToPlayer(player: ExoPlayer) {
+        player.repeatMode = when (savedRepeatMode) {
+            RepeatMode.NONE -> Player.REPEAT_MODE_OFF
+            RepeatMode.ALL -> Player.REPEAT_MODE_ALL
+            RepeatMode.ONE -> Player.REPEAT_MODE_ONE
+        }
+        player.shuffleModeEnabled = false
+    }
+
+    fun isInitialized(): Boolean = exoPlayer != null
 
     fun getExoPlayer(): ExoPlayer {
         ensureInitialized()
-        return exoPlayer
+        return exoPlayer!!
     }
 
     fun getQueue(): List<Track> = trackQueue
 
-    fun getCurrentIndex(): Int =
-        if (::exoPlayer.isInitialized) exoPlayer.currentMediaItemIndex else -1
+    fun getCurrentIndex(): Int {
+        val p = exoPlayer
+        return if (p != null && p.mediaItemCount > 0) {
+            p.currentMediaItemIndex
+        } else if (trackQueue.isNotEmpty()) {
+            pendingStartIndex.coerceIn(0, trackQueue.lastIndex)
+        } else {
+            -1
+        }
+    }
 
     @OptIn(UnstableApi::class)
     fun startServiceIfNeeded() {
@@ -85,20 +150,35 @@ class PlayerController(private val context: Context) {
         } catch (_: Exception) {}
     }
 
+    private fun buildNewExoPlayer(): ExoPlayer {
+        return ExoPlayer.Builder(context)
+            .setAudioAttributes(
+                androidx.media3.common.AudioAttributes.Builder()
+                    .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                    .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .build(),
+                /* handleAudioFocus = */ true
+            )
+            .setHandleAudioBecomingNoisy(true)
+            .build()
+    }
+
     private fun ensureInitialized() {
-        if (!::exoPlayer.isInitialized) {
-            exoPlayer = ExoPlayer.Builder(context)
-                .setAudioAttributes(
-                    androidx.media3.common.AudioAttributes.Builder()
-                        .setUsage(androidx.media3.common.C.USAGE_MEDIA)
-                        .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC)
-                        .build(),
-                    /* handleAudioFocus = */ true
-                )
-                .setHandleAudioBecomingNoisy(true)
-                .build()
-            init(exoPlayer)
+        if (exoPlayer == null) {
+            val player = buildNewExoPlayer()
+            exoPlayer = player
+            attachPlayerListeners(player)
+            applySavedModesToPlayer(player)
         }
+    }
+
+    private fun recreatePlayer() {
+        fadeJob?.cancel()
+        isCrossfading = false
+        try { crossfadePlayer?.stop() } catch (_: Exception) {}
+        try { exoPlayer?.release() } catch (_: Exception) {}
+        exoPlayer = null
+        ensureInitialized()
     }
 
     private fun String.upscaleCover(): String {
@@ -107,49 +187,121 @@ class PlayerController(private val context: Context) {
             .replace("100x100", "600x600")
     }
 
-    fun setQueue(tracks: List<Track>, startIndex: Int = 0) {
+    /**
+     * Восстанавливает очередь и позицию при холодном старте приложения,
+     * не запуская foreground-сервис и не начиная воспроизведение до нажатия Play.
+     */
+    fun restorePausedState(tracks: List<Track>, startIndex: Int, positionMs: Long) {
+        if (tracks.isEmpty()) return
         trackQueue = tracks
-        ensureInitialized()
-        startServiceIfNeeded()
-        val mediaItems = tracks.map { track ->
-            val url = track.filePath ?: track.sourceUrl ?: ""
-            val coverUrl = track.coverUrl?.upscaleCover()
-            val artworkUri = coverUrl?.let { Uri.parse(it) }
+        pendingStartIndex = startIndex.coerceIn(0, tracks.lastIndex)
+        pendingStartPositionMs = positionMs.coerceAtLeast(0L)
+        lastPauseTimestampMs = System.currentTimeMillis()
+        onQueueChange?.invoke(trackQueue)
+    }
 
-            MediaItem.Builder()
-                .setMediaId(track.id)
-                .setUri(url)
-                .setMediaMetadata(
-                    MediaMetadata.Builder()
-                        .setTitle(track.title)
-                        .setArtist(track.artist)
-                        .setArtworkUri(artworkUri)
-                        .build()
-                )
-                .build()
+    fun setQueue(tracks: List<Track>, startIndex: Int = 0, startPositionMs: Long = 0L) {
+        trackQueue = tracks
+        val safeIdx = if (tracks.isNotEmpty()) startIndex.coerceIn(0, tracks.lastIndex) else 0
+        pendingStartIndex = safeIdx
+        pendingStartPositionMs = startPositionMs.coerceAtLeast(0L)
+
+        val wasIdleTooLong = lastPauseTimestampMs > 0L &&
+                (System.currentTimeMillis() - lastPauseTimestampMs) > STALE_PLAYER_THRESHOLD_MS
+        if (wasIdleTooLong || exoPlayer?.playerError != null) {
+            recreatePlayer()
+        } else {
+            ensureInitialized()
         }
-        exoPlayer.setMediaItems(mediaItems, startIndex, 0)
-        exoPlayer.prepare()
+
+        val player = exoPlayer!!
+        val mediaItems = tracks.map { it.toMediaItem() }
+        player.setMediaItems(mediaItems, safeIdx, pendingStartPositionMs)
+        player.prepare()
+        startServiceIfNeeded()
         onQueueChange?.invoke(trackQueue)
     }
 
     fun play() {
-        ensureInitialized()
-        startServiceIfNeeded()
-        exoPlayer.play()
+        if (trackQueue.isEmpty()) return
+
+        val p = exoPlayer
+        val wasIdleTooLong = lastPauseTimestampMs > 0L &&
+                (System.currentTimeMillis() - lastPauseTimestampMs) > STALE_PLAYER_THRESHOLD_MS
+
+        val needsRebuild = p == null ||
+                p.mediaItemCount == 0 ||
+                p.playbackState == Player.STATE_IDLE ||
+                p.playbackState == Player.STATE_ENDED ||
+                p.playerError != null ||
+                wasIdleTooLong ||
+                !isServiceRunning
+
+        if (needsRebuild) {
+            val idx = if (p != null && p.mediaItemCount > 0) {
+                p.currentMediaItemIndex.coerceIn(0, trackQueue.lastIndex)
+            } else {
+                pendingStartIndex.coerceIn(0, trackQueue.lastIndex)
+            }
+            val pos = if (p != null && p.mediaItemCount > 0 && p.playbackState != Player.STATE_ENDED) {
+                p.currentPosition.coerceAtLeast(pendingStartPositionMs)
+            } else if (p?.playbackState == Player.STATE_ENDED) {
+                0L
+            } else {
+                pendingStartPositionMs
+            }
+
+            recreatePlayer()
+            val freshPlayer = exoPlayer!!
+            val mediaItems = trackQueue.map { it.toMediaItem() }
+            freshPlayer.setMediaItems(mediaItems, idx, pos)
+            freshPlayer.prepare()
+            startServiceIfNeeded()
+            freshPlayer.play()
+        } else {
+            startServiceIfNeeded()
+            p.play()
+        }
     }
+
     fun pause() {
         fadeJob?.cancel()
         if (isCrossfading) {
             isCrossfading = false
             crossfadePlayer?.stop()
             crossfadePlayer?.clearMediaItems()
-            if (::exoPlayer.isInitialized) {
-                exoPlayer.volume = 1.0f
-            }
+            exoPlayer?.volume = 1.0f
         }
-        if (::exoPlayer.isInitialized) exoPlayer.pause()
+        exoPlayer?.pause()
     }
+
+    /**
+     * Заменяет трек в очереди (например, после обновления протухшей ссылки)
+     * и при необходимости сразу запускает его с указанной позиции.
+     */
+    fun replaceTrackAt(index: Int, updatedTrack: Track, positionMs: Long, autoPlay: Boolean) {
+        if (index !in trackQueue.indices) return
+        trackQueue = trackQueue.toMutableList().apply { set(index, updatedTrack) }
+        pendingStartIndex = index
+        pendingStartPositionMs = positionMs.coerceAtLeast(0L)
+
+        ensureInitialized()
+        val player = exoPlayer!!
+        if (index < player.mediaItemCount) {
+            player.replaceMediaItem(index, updatedTrack.toMediaItem())
+            player.seekTo(index, pendingStartPositionMs)
+            player.prepare()
+            if (autoPlay) {
+                startServiceIfNeeded()
+                player.play()
+            }
+        } else {
+            setQueue(trackQueue, index, pendingStartPositionMs)
+            if (autoPlay) play()
+        }
+        onQueueChange?.invoke(trackQueue)
+    }
+
     private var crossfadePlayer: ExoPlayer? = null
     private var isCrossfading = false
 
@@ -176,35 +328,33 @@ class PlayerController(private val context: Context) {
     }
 
     fun performCrossfadeToNext(durationMs: Long) {
-        if (!::exoPlayer.isInitialized || !exoPlayer.isPlaying || isCrossfading) return
-        val currentMediaItem = exoPlayer.currentMediaItem ?: return
-        val curIndex = exoPlayer.currentMediaItemIndex
+        val player = exoPlayer ?: return
+        if (!player.isPlaying || isCrossfading) return
+        val currentMediaItem = player.currentMediaItem ?: return
+        val curIndex = player.currentMediaItemIndex
         if (curIndex !in trackQueue.indices) return
         val nextIndex = curIndex + 1
-        if (nextIndex >= trackQueue.size && exoPlayer.repeatMode == Player.REPEAT_MODE_OFF) return
+        if (nextIndex >= trackQueue.size && player.repeatMode == Player.REPEAT_MODE_OFF) return
 
-        val currentPos = exoPlayer.currentPosition
+        val currentPos = player.currentPosition
         val xPlayer = ensureCrossfadePlayer()
 
         fadeJob?.cancel()
         isCrossfading = true
 
-        // 1. Вспомогательный плеер продолжает доигрывать текущий трек с текущей секунды
         xPlayer.setMediaItem(currentMediaItem, currentPos)
         xPlayer.volume = 1.0f
         xPlayer.prepare()
         xPlayer.play()
 
-        // 2. Основной exoPlayer переходит на следующий трек и стартует с громкостью 0
-        exoPlayer.volume = 0.0f
+        player.volume = 0.0f
         if (nextIndex < trackQueue.size) {
-            exoPlayer.seekToDefaultPosition(nextIndex)
+            player.seekToDefaultPosition(nextIndex)
         } else {
-            exoPlayer.seekToDefaultPosition(0)
+            player.seekToDefaultPosition(0)
         }
-        exoPlayer.play()
+        player.play()
 
-        // 3. Плавное одновременное наложение двух треков
         val fadeDuration = durationMs.coerceIn(500L, 8000L)
         fadeJob = controllerScope.launch {
             val steps = 20
@@ -213,103 +363,136 @@ class PlayerController(private val context: Context) {
                 delay(stepTime)
                 val progress = i.toFloat() / steps
                 xPlayer.volume = (1.0f - progress).coerceIn(0f, 1f)
-                if (::exoPlayer.isInitialized) {
-                    exoPlayer.volume = progress.coerceIn(0f, 1f)
-                }
+                exoPlayer?.volume = progress.coerceIn(0f, 1f)
             }
             xPlayer.stop()
             xPlayer.clearMediaItems()
-            if (::exoPlayer.isInitialized) {
-                exoPlayer.volume = 1.0f
-            }
+            exoPlayer?.volume = 1.0f
             isCrossfading = false
         }
     }
 
     fun next() {
-        if (!::exoPlayer.isInitialized) return
-        val curIndex = exoPlayer.currentMediaItemIndex
-        val hasNext = curIndex + 1 < trackQueue.size || exoPlayer.repeatMode != Player.REPEAT_MODE_OFF
-        if (crossfadeSeconds > 0 && exoPlayer.isPlaying && hasNext) {
+        val player = exoPlayer ?: return
+        val curIndex = player.currentMediaItemIndex
+        val hasNext = curIndex + 1 < trackQueue.size || player.repeatMode != Player.REPEAT_MODE_OFF
+        if (crossfadeSeconds > 0 && player.isPlaying && hasNext) {
             performCrossfadeToNext(minOf(crossfadeSeconds * 1000L, 2500L))
         } else {
             fadeJob?.cancel()
             isCrossfading = false
             crossfadePlayer?.stop()
-            exoPlayer.volume = 1.0f
-            exoPlayer.seekToNext()
+            player.volume = 1.0f
+            if (player.playbackState == Player.STATE_IDLE) {
+                player.prepare()
+            }
+            player.seekToNext()
         }
     }
 
     fun replaceQueueKeepingCurrent(newQueue: List<Track>, newCurrentIndex: Int) {
         trackQueue = newQueue
-        if (!::exoPlayer.isInitialized || exoPlayer.mediaItemCount == 0) {
+        pendingStartIndex = newCurrentIndex.coerceIn(0, (newQueue.size - 1).coerceAtLeast(0))
+        val player = exoPlayer
+        if (player == null || player.mediaItemCount == 0) {
             setQueue(newQueue, newCurrentIndex)
             return
         }
 
-        val currentExoIdx = exoPlayer.currentMediaItemIndex
-        // 1. Удаляем все элементы ПОСЛЕ текущего
-        if (currentExoIdx + 1 < exoPlayer.mediaItemCount) {
-            exoPlayer.removeMediaItems(currentExoIdx + 1, exoPlayer.mediaItemCount)
+        val currentExoIdx = player.currentMediaItemIndex
+        if (currentExoIdx + 1 < player.mediaItemCount) {
+            player.removeMediaItems(currentExoIdx + 1, player.mediaItemCount)
         }
-        // 2. Удаляем все элементы ДО текущего (после этого текущий трек окажется на индексе 0)
         if (currentExoIdx > 0) {
-            exoPlayer.removeMediaItems(0, currentExoIdx)
+            player.removeMediaItems(0, currentExoIdx)
         }
-
-        // 3. Вставляем треки, которые должны стоять ДО текущего (если выключаем shuffle)
         if (newCurrentIndex > 0) {
             val beforeItems = newQueue.subList(0, newCurrentIndex).map { it.toMediaItem() }
-            exoPlayer.addMediaItems(0, beforeItems)
+            player.addMediaItems(0, beforeItems)
         }
-        // 4. Вставляем треки, которые должны стоять ПОСЛЕ текущего
         if (newCurrentIndex + 1 < newQueue.size) {
             val afterItems = newQueue.subList(newCurrentIndex + 1, newQueue.size).map { it.toMediaItem() }
-            exoPlayer.addMediaItems(newCurrentIndex + 1, afterItems)
+            player.addMediaItems(newCurrentIndex + 1, afterItems)
         }
 
         onQueueChange?.invoke(trackQueue)
     }
 
     fun previous() {
-        if (!::exoPlayer.isInitialized) return
+        val player = exoPlayer ?: return
         fadeJob?.cancel()
         isCrossfading = false
         crossfadePlayer?.stop()
-        exoPlayer.volume = 1.0f
-        exoPlayer.seekToPrevious()
+        player.volume = 1.0f
+        if (player.playbackState == Player.STATE_IDLE) {
+            player.prepare()
+        }
+        player.seekToPrevious()
     }
+
     fun seekTo(progress: Float) {
-        if (!::exoPlayer.isInitialized) return
-        val duration = exoPlayer.duration
-        if (duration > 0) exoPlayer.seekTo((progress * duration).toLong())
+        val player = exoPlayer ?: return
+        val duration = player.duration
+        if (duration > 0) {
+            val pos = (progress * duration).toLong()
+            pendingStartPositionMs = pos
+            player.seekTo(pos)
+        }
     }
+
     fun seekToPosition(positionMs: Long) {
-        if (!::exoPlayer.isInitialized) return
-        exoPlayer.seekTo(positionMs)
+        pendingStartPositionMs = positionMs.coerceAtLeast(0L)
+        exoPlayer?.seekTo(pendingStartPositionMs)
     }
+
     fun getCurrentProgress(): Float {
-        if (!::exoPlayer.isInitialized) return 0f
-        val duration = exoPlayer.duration
-        return if (duration > 0) exoPlayer.currentPosition.toFloat() / duration else 0f
+        val player = exoPlayer
+        if (player != null && player.duration > 0) {
+            return player.currentPosition.toFloat() / player.duration
+        }
+        val trackDur = trackQueue.getOrNull(pendingStartIndex)?.duration ?: 0L
+        return if (trackDur > 0 && pendingStartPositionMs > 0) {
+            (pendingStartPositionMs.toFloat() / trackDur).coerceIn(0f, 1f)
+        } else {
+            0f
+        }
     }
-    fun getDuration(): Long = if (::exoPlayer.isInitialized) exoPlayer.duration.coerceAtLeast(0) else 0
-    fun getCurrentPosition(): Long = if (::exoPlayer.isInitialized) exoPlayer.currentPosition.coerceAtLeast(0) else 0
-    fun isPlaying(): Boolean = ::exoPlayer.isInitialized && exoPlayer.isPlaying
+
+    fun getDuration(): Long {
+        val player = exoPlayer
+        if (player != null && player.duration > 0) {
+            return player.duration
+        }
+        return trackQueue.getOrNull(pendingStartIndex)?.duration?.coerceAtLeast(0) ?: 0L
+    }
+
+    fun getCurrentPosition(): Long {
+        val player = exoPlayer
+        if (player != null && player.mediaItemCount > 0) {
+            return player.currentPosition.coerceAtLeast(0)
+        }
+        return pendingStartPositionMs
+    }
+
+    fun isPlaying(): Boolean = exoPlayer?.isPlaying == true
+
     fun setRepeatMode(repeatMode: Int) {
-        if (::exoPlayer.isInitialized) exoPlayer.repeatMode = repeatMode
+        exoPlayer?.repeatMode = repeatMode
     }
+
     fun setShuffleEnabled(enabled: Boolean) {
-        if (::exoPlayer.isInitialized) exoPlayer.shuffleModeEnabled = enabled
+        exoPlayer?.shuffleModeEnabled = enabled
     }
+
     fun release() {
         fadeJob?.cancel()
         controllerScope.cancel()
         crossfadePlayer?.release()
         crossfadePlayer = null
-        if (::exoPlayer.isInitialized) exoPlayer.release()
+        exoPlayer?.release()
+        exoPlayer = null
     }
+
     fun setOnTrackChangeListener(listener: (Int) -> Unit) { onTrackChange = listener }
     fun setOnIsPlayingChangeListener(listener: (Boolean) -> Unit) { onIsPlayingChange = listener }
     fun setOnPlayerErrorListener(listener: (PlaybackException) -> Unit) { onPlayerError = listener }
@@ -317,32 +500,34 @@ class PlayerController(private val context: Context) {
 
     fun insertAfterCurrent(tracks: List<Track>) {
         ensureInitialized()
-        val currentIndex = exoPlayer.currentMediaItemIndex.coerceAtLeast(0)
-        // Синхронизируем внутренний список треков с ExoPlayer
+        val player = exoPlayer!!
+        val currentIndex = player.currentMediaItemIndex.coerceAtLeast(0)
         trackQueue = trackQueue.toMutableList().apply { addAll(currentIndex + 1, tracks) }
         val mediaItems = tracks.map { it.toMediaItem() }
-        exoPlayer.addMediaItems(currentIndex + 1, mediaItems)
+        player.addMediaItems(currentIndex + 1, mediaItems)
         onQueueChange?.invoke(trackQueue)
     }
 
     fun insertAt(position: Int, tracks: List<Track>) {
         ensureInitialized()
+        val player = exoPlayer!!
         val pos = position.coerceIn(0, trackQueue.size)
         trackQueue = trackQueue.toMutableList().apply { addAll(pos, tracks) }
         val mediaItems = tracks.map { it.toMediaItem() }
-        if (pos >= exoPlayer.mediaItemCount) {
-            exoPlayer.addMediaItems(mediaItems)
+        if (pos >= player.mediaItemCount) {
+            player.addMediaItems(mediaItems)
         } else {
-            exoPlayer.addMediaItems(pos, mediaItems)
+            player.addMediaItems(pos, mediaItems)
         }
         onQueueChange?.invoke(trackQueue)
     }
 
     fun addToEnd(tracks: List<Track>) {
         ensureInitialized()
+        val player = exoPlayer!!
         trackQueue = trackQueue + tracks
         val mediaItems = tracks.map { it.toMediaItem() }
-        exoPlayer.addMediaItems(mediaItems)
+        player.addMediaItems(mediaItems)
         onQueueChange?.invoke(trackQueue)
     }
 
@@ -355,9 +540,7 @@ class PlayerController(private val context: Context) {
         val item = mutable.removeAt(fromIndex)
         mutable.add(toIndex, item)
         trackQueue = mutable
-        if (::exoPlayer.isInitialized) {
-            exoPlayer.moveMediaItem(fromIndex, toIndex)
-        }
+        exoPlayer?.moveMediaItem(fromIndex, toIndex)
         onQueueChange?.invoke(trackQueue)
     }
 
@@ -381,8 +564,9 @@ class PlayerController(private val context: Context) {
     fun removeAt(index: Int) {
         if (index !in trackQueue.indices) return
         trackQueue = trackQueue.toMutableList().apply { removeAt(index) }
-        if (::exoPlayer.isInitialized && index < exoPlayer.mediaItemCount) {
-            exoPlayer.removeMediaItem(index)
+        val player = exoPlayer
+        if (player != null && index < player.mediaItemCount) {
+            player.removeMediaItem(index)
         }
         onQueueChange?.invoke(trackQueue)
     }
