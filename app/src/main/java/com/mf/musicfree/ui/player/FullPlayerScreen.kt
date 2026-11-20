@@ -13,11 +13,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.automirrored.filled.Subject
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -258,12 +256,12 @@ fun FullPlayerScreen(
                         }
 
                         // Скачать офлайн
-                        if (currentDownloadProgress != null) {
+                        if (currentDownloadProgress != null && !isDownloaded) {
                             Box(
                                 modifier = Modifier.size(48.dp),
                                 contentAlignment = Alignment.Center
                             ) {
-                                if (currentDownloadProgress >= 0) {
+                                if (currentDownloadProgress > 0) {
                                     CircularProgressIndicator(
                                         progress = { currentDownloadProgress / 100f },
                                         modifier = Modifier.size(24.dp),
@@ -296,14 +294,6 @@ fun FullPlayerScreen(
                             }
                         }
 
-                        // В плейлист
-                        IconButton(onClick = { showAddToPlaylist = true }) {
-                            Icon(
-                                imageVector = Icons.Default.Add,
-                                contentDescription = "В плейлист",
-                                modifier = Modifier.size(26.dp)
-                            )
-                        }
 
                         // Моя Волна
                         IconButton(onClick = { viewModel.toggleRadioMode() }) {

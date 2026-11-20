@@ -209,7 +209,7 @@ class PlayerViewModel(
                             _currentTrack.value = updated
                         }
                         if (trackRepository.exists(updated.id)) {
-                            trackRepository.addTrack(updated)
+                            trackRepository.updateSourceUrl(updated.id, freshUrl)
                         }
                         playerController.replaceTrackAt(failedIdx, updated, savedPos, autoPlay = true)
                     } else {
@@ -264,13 +264,21 @@ class PlayerViewModel(
                     }
 
                     val xSec = playerController.getCrossfadeSeconds()
-                    if (xSec > 0 && dur > 0 && !playerController.isCrossfading()) {
+                    if (xSec > 0 && dur > 0 && !playerController.isCrossfading() && _repeatMode.value != RepeatMode.ONE) {
                         val remainingMs = dur - pos
                         val crossfadeMs = xSec * 1000L
                         val curIdx = _currentIndex.value
-                        val hasNext = curIdx + 1 < _queue.value.size || _repeatMode.value != RepeatMode.NONE
-                        if (remainingMs in 1..crossfadeMs && hasNext) {
-                            playerController.performCrossfadeToNext(remainingMs)
+                        val nextIdx = when {
+                            curIdx + 1 < _queue.value.size -> curIdx + 1
+                            _repeatMode.value == RepeatMode.ALL && _queue.value.isNotEmpty() -> 0
+                            else -> -1
+                        }
+                        if (nextIdx in _queue.value.indices) {
+                            if (remainingMs in (crossfadeMs + 1)..(crossfadeMs + 6000L)) {
+                                playerController.preloadNextTrack(_queue.value[nextIdx])
+                            } else if (remainingMs in 1..crossfadeMs) {
+                                playerController.performCrossfadeToNext(remainingMs)
+                            }
                         }
                     }
 

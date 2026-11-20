@@ -38,4 +38,13 @@ interface TrackDao {
 
     @Query("SELECT EXISTS(SELECT 1 FROM tracks WHERE id = :id)")
     suspend fun exists(id: String): Boolean
+
+    @Query("SELECT COALESCE(MAX(addedAt), 0) FROM tracks")
+    suspend fun getMaxAddedAt(): Long
+
+    @Query("UPDATE tracks SET addedAt = :addedAt WHERE id = :id")
+    suspend fun updateAddedAt(id: String, addedAt: Long)
+
+    @Query("UPDATE tracks SET sourceUrl = :sourceUrl WHERE id = :id")
+    suspend fun updateSourceUrl(id: String, sourceUrl: String)
 }

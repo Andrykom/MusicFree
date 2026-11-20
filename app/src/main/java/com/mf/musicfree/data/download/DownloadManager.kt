@@ -80,7 +80,7 @@ class DownloadManager(
         }
         scope.launch {
             try {
-                trackRepository.ensureTrackExists(track)
+                trackRepository.ensureTrackExists(track, bumpToTop = false)
                 val safeName = "${track.artist} - ${track.title}"
                     .replace(Regex("""[\\/:*?"<>|]"""), "_")
                     .take(120)

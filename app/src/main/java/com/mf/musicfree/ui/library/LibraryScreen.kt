@@ -34,6 +34,20 @@ import com.mf.musicfree.player.PlayerViewModel
 import com.mf.musicfree.ui.components.AddToPlaylistDialog
 import com.mf.musicfree.ui.components.TrackCover
 import org.koin.androidx.compose.koinViewModel
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.animation.AnimatedVisibility
 
 @Composable
 fun LibraryScreen(
@@ -44,42 +58,128 @@ fun LibraryScreen(
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Треки", "Плейлисты")
     val searchQuery by viewModel.searchQuery.collectAsState()
+    var isSearchExpanded by rememberSaveable { mutableStateOf(searchQuery.isNotEmpty()) }
+    val focusRequester = remember { FocusRequester() }
+
+    val closeSearch = {
+        isSearchExpanded = false
+        viewModel.clearSearchQuery()
+    }
+
+    BackHandler(enabled = isSearchExpanded) {
+        closeSearch()
+    }
+
+    LaunchedEffect(isSearchExpanded) {
+        if (isSearchExpanded) {
+            focusRequester.requestFocus()
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { viewModel.onSearchQueryChange(it) },
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            placeholder = { Text("Поиск по названию или артисту...") },
-            leadingIcon = {
+                .height(48.dp)
+        ) {
+            // 1. Оригинальный TabRow на всю ширину — вкладки остаются строго по центру своих половин
+            TabRow(
+                selectedTabIndex = selectedTab,
+                modifier = Modifier.fillMaxSize()
+            ) {
+                tabs.forEachIndexed { index, title ->
+                    Tab(
+                        selected = selectedTab == index,
+                        onClick = { selectedTab = index },
+                        text = { Text(title) }
+                    )
+                }
+            }
+
+            // 2. Лупа поверх пустого левого края TabRow (не сдвигает вкладки)
+            IconButton(
+                onClick = { isSearchExpanded = true },
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 4.dp)
+            ) {
                 Icon(
                     imageVector = Icons.Default.Search,
-                    contentDescription = "Поиск"
+                    contentDescription = "Поиск в библиотеке",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-            },
-            trailingIcon = if (searchQuery.isNotEmpty()) {
-                {
-                    IconButton(onClick = { viewModel.clearSearchQuery() }) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Очистить"
+            }
+
+            // 3. Поисковая строка — при нажатии на лупу растягивается на всю ширину
+            this@Column.AnimatedVisibility(
+                visible = isSearchExpanded,
+                enter = expandHorizontally(
+                    expandFrom = Alignment.Start,
+                    animationSpec = tween(220)
+                ) + fadeIn(tween(180)),
+                exit = shrinkHorizontally(
+                    shrinkTowards = Alignment.Start,
+                    animationSpec = tween(200)
+                ) + fadeOut(tween(150)),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = closeSearch) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Закрыть поиск",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        BasicTextField(
+                            value = searchQuery,
+                            onValueChange = { viewModel.onSearchQueryChange(it) },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(
+                                color = MaterialTheme.colorScheme.onSurface
+                            ),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            modifier = Modifier
+                                .weight(1f)
+                                .focusRequester(focusRequester)
+                                .padding(horizontal = 4.dp),
+                            decorationBox = { innerTextField ->
+                                Box(contentAlignment = Alignment.CenterStart) {
+                                    if (searchQuery.isEmpty()) {
+                                        Text(
+                                            text = "Поиск по названию или артисту...",
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    innerTextField()
+                                }
+                            }
                         )
+
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { viewModel.clearSearchQuery() }) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Очистить",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
                 }
-            } else null,
-            singleLine = true,
-            shape = MaterialTheme.shapes.medium
-        )
-
-        TabRow(selectedTabIndex = selectedTab) {
-            tabs.forEachIndexed { index, title ->
-                Tab(
-                    selected = selectedTab == index,
-                    onClick = { selectedTab = index },
-                    text = { Text(title) }
-                )
             }
         }
 
@@ -96,7 +196,6 @@ private fun TracksTab(
     viewModel: LibraryViewModel
 ) {
     val tracks by viewModel.filteredTracks.collectAsState()
-    val allTracks by viewModel.tracks.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val currentTrack by playerViewModel.currentTrack.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
@@ -184,7 +283,6 @@ private fun PlaylistsTab(
     onNavigate: (String) -> Unit
 ) {
     val playlists by viewModel.filteredPlaylists.collectAsState()
-    val allPlaylists by viewModel.playlists.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val deviceTracksCount by viewModel.deviceTracksCount.collectAsState()
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -509,7 +607,7 @@ fun TrackItem(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 when {
                     isDownloading -> {
-                        if (downloadProgress != null && downloadProgress >= 0) {
+                        if (downloadProgress != null && downloadProgress > 0) {
                             Text(
                                 "${downloadProgress}%",
                                 style = MaterialTheme.typography.labelSmall,
@@ -592,7 +690,7 @@ fun TrackItem(
         }
 
         if (isDownloading) {
-            if (downloadProgress != null && downloadProgress >= 0) {
+            if (downloadProgress != null && downloadProgress > 0) {
                 LinearProgressIndicator(
                     progress = { downloadProgress / 100f },
                     modifier = Modifier

@@ -249,6 +249,7 @@ class SearchViewModel(
                 try { playerController?.removeById(searchTrack.id) } catch (_: Exception) {}
                 val existing = trackRepository.getTrackById(searchTrack.id)
                 if (existing != null) {
+                    downloadManager?.cancelOrDeleteDownload(searchTrack.id, existing.filePath)
                     trackRepository.deleteTrack(existing)
                 } else {
                     trackRepository.deleteById(searchTrack.id)

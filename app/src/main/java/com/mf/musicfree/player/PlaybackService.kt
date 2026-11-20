@@ -53,6 +53,37 @@ class PlaybackService : MediaSessionService() {
         private const val IDLE_TIMEOUT_MS = 15 * 60_000L // 15 минут паузы -> закрываем сервис и шторку
     }
 
+    private var attachedPlayer: Player? = null
+    private val servicePlayerListener = object : Player.Listener {
+        override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
+            attachedPlayer?.let { updateNotification(it) }
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            val p = attachedPlayer ?: return
+            updateNotification(p)
+            if (isPlaying) {
+                idleStopJob?.cancel()
+            } else {
+                scheduleIdleShutdown(p)
+            }
+        }
+    }
+
+    private fun bindPlayer(player: Player) {
+        if (attachedPlayer === player) return
+        attachedPlayer?.removeListener(servicePlayerListener)
+        attachedPlayer = player
+        player.addListener(servicePlayerListener)
+        mediaSession?.setPlayer(player)
+        updateNotification(player)
+        if (player.isPlaying) {
+            idleStopJob?.cancel()
+        } else {
+            scheduleIdleShutdown(player)
+        }
+    }
+
     override fun onCreate() {
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildEmptyNotification())
@@ -60,6 +91,11 @@ class PlaybackService : MediaSessionService() {
         val player = playerController.getExoPlayer()
         mediaSession = MediaSession.Builder(this, player).build()
         playerController.setServiceRunning(true)
+
+        bindPlayer(player)
+        playerController.setOnActivePlayerChangedListener { newPlayer ->
+            bindPlayer(newPlayer)
+        }
 
         super.onCreate()
 
@@ -274,6 +310,8 @@ class PlaybackService : MediaSessionService() {
         currentCoverJob?.cancel()
         serviceScope.cancel()
         playerController.setServiceRunning(false)
+        attachedPlayer?.removeListener(servicePlayerListener)
+        attachedPlayer = null
         mediaSession?.run {
             release()
             mediaSession = null

@@ -4,17 +4,26 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -79,18 +88,13 @@ fun MainScreen() {
                             viewModel = playerViewModel,
                             onExpand = { showPlayer = true }
                         )
-                        NavigationBar {
-                            items.forEachIndexed { index, item ->
-                                NavigationBarItem(
-                                    icon = { Icon(item.icon, contentDescription = item.title) },
-                                    label = { Text(item.title) },
-                                    selected = pagerState.currentPage == index,
-                                    onClick = {
-                                        scope.launch { pagerState.animateScrollToPage(index) }
-                                    }
-                                )
+                        CompactBottomBar(
+                            items = items,
+                            selectedIndex = pagerState.currentPage,
+                            onSelect = { index ->
+                                scope.launch { pagerState.animateScrollToPage(index) }
                             }
-                        }
+                        )
                     }
                 }
             }
@@ -192,6 +196,84 @@ fun MainScreen() {
                         showPlayer = true
                     }
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactBottomBar(
+    items: List<BottomNavItem>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit
+) {
+    Surface(
+        color = NavigationBarDefaults.containerColor,
+        tonalElevation = 3.dp
+    ) {
+        Column {
+            HorizontalDivider(
+                thickness = 0.5.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .height(48.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                items.forEachIndexed { index, item ->
+                    val selected = selectedIndex == index
+                    val indicatorColor by animateColorAsState(
+                        targetValue = if (selected) {
+                            MaterialTheme.colorScheme.secondaryContainer
+                        } else {
+                            Color.Transparent
+                        },
+                        animationSpec = tween(180),
+                        label = "navIndicator"
+                    )
+                    val iconTint by animateColorAsState(
+                        targetValue = if (selected) {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        animationSpec = tween(180),
+                        label = "navIconTint"
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .selectable(
+                                selected = selected,
+                                onClick = { onSelect(index) },
+                                role = Role.Tab,
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .height(32.dp)
+                                .width(56.dp)
+                                .clip(CircleShape)
+                                .background(indicatorColor),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = item.icon,
+                                contentDescription = item.title,
+                                tint = iconTint,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
             }
         }
     }

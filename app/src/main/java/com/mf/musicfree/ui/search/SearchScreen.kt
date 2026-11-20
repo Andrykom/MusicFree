@@ -39,6 +39,8 @@ import com.mf.musicfree.ui.components.TrackCover
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.platform.LocalFocusManager
 
 @Composable
 fun SearchScreen(
@@ -56,12 +58,22 @@ fun SearchScreen(
     val currentTrack by playerViewModel.currentTrack.collectAsState()
     val libraryIds by viewModel.libraryIds.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
+    val error by viewModel.error.collectAsState()
 
     val context = LocalContext.current
     val plugins = remember { pluginManager.plugins }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    val focusManager = LocalFocusManager.current
+
+    LaunchedEffect(error) {
+        val msg = error ?: return@LaunchedEffect
+        if (uiState !is SearchUiState.Error) {
+            snackbarHostState.showSnackbar(msg, duration = SnackbarDuration.Short)
+            viewModel.clearError()
+        }
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) }
@@ -78,7 +90,15 @@ fun SearchScreen(
                     onValueChange = { viewModel.onQueryChange(it) },
                     placeholder = { Text("Поиск треков...") },
                     leadingIcon = { Icon(Icons.Default.Search, null) },
+                    trailingIcon = if (query.isNotEmpty()) {
+                        {
+                            IconButton(onClick = { viewModel.onQueryChange("") }) {
+                                Icon(Icons.Default.Close, contentDescription = "Очистить")
+                            }
+                        }
+                    } else null,
                     singleLine = true,
+                    shape = MaterialTheme.shapes.medium,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -86,32 +106,18 @@ fun SearchScreen(
                         imeAction = androidx.compose.ui.text.input.ImeAction.Search
                     ),
                     keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                        onSearch = { viewModel.search() }
+                        onSearch = {
+                            focusManager.clearFocus()
+                            viewModel.search()
+                        }
                     )
                 )
-
-                Button(
-                    onClick = { viewModel.search() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    enabled = !isSearching && query.isNotBlank()
-                ) {
-                    if (isSearching) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-                    Text("Искать")
-                }
 
                 if (plugins.isNotEmpty()) {
                     LazyRow(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(plugins) { plugin ->
@@ -119,7 +125,11 @@ fun SearchScreen(
                             FilterChip(
                                 selected = selected,
                                 onClick = {
-                                    viewModel.selectPlugin(if (selected) null else plugin)
+                                    val nextPlugin = if (selected) null else plugin
+                                    viewModel.selectPlugin(nextPlugin)
+                                    if (nextPlugin != null && query.isNotBlank()) {
+                                        viewModel.search()
+                                    }
                                 },
                                 label = { Text(plugin.name) },
                                 leadingIcon = if (selected) {
@@ -156,7 +166,7 @@ fun SearchScreen(
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                                 )
                                 Text(
-                                    text = "Введите запрос и нажмите «Искать»",
+                                    text = "Введите название трека или исполнителя",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     textAlign = TextAlign.Center
                                 )
@@ -373,7 +383,9 @@ fun SearchResultItem(
                         text = track.artist,
                         style = MaterialTheme.typography.bodySmall,
                         color = if (isCurrent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
                     )
                     track.quality?.let {
                         Text(
@@ -404,12 +416,12 @@ fun SearchResultItem(
                     )
                 }
 
-                if (downloadProgress != null) {
+                if (downloadProgress != null && !isDownloaded) {
                     Box(
                         modifier = Modifier.size(40.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (downloadProgress >= 0) {
+                        if (downloadProgress > 0) {
                             CircularProgressIndicator(
                                 progress = { downloadProgress / 100f },
                                 modifier = Modifier.size(20.dp),
