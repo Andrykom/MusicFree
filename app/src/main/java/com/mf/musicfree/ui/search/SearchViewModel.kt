@@ -18,6 +18,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import com.mf.musicfree.data.repository.CatalogRepository
+import com.mf.musicfree.data.model.CatalogSearchResult
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 
 sealed class SearchUiState {
     data object Idle : SearchUiState()
@@ -33,7 +38,9 @@ class SearchViewModel(
     private val workManager: WorkManager,
     private val playerController: com.mf.musicfree.player.PlayerController? = null,
     private val settingsRepository: com.mf.musicfree.data.preferences.SettingsRepository? = null,
-    private val downloadManager: com.mf.musicfree.data.download.DownloadManager? = null
+    private val downloadManager: com.mf.musicfree.data.download.DownloadManager? = null,
+    private val catalogRepository: CatalogRepository? = null
+
 ) : ViewModel() {
 
     private val _query = MutableStateFlow("")
@@ -44,6 +51,11 @@ class SearchViewModel(
 
     private val _results = MutableStateFlow<List<SearchTrack>>(emptyList())
     val results: StateFlow<List<SearchTrack>> = _results
+
+    private val _catalogResult = MutableStateFlow(CatalogSearchResult())
+    val catalogResult: StateFlow<CatalogSearchResult> = _catalogResult
+
+    private var searchJob: Job? = null
 
     private val _isSearching = MutableStateFlow(false)
     val isSearching: StateFlow<Boolean> = _isSearching
@@ -101,8 +113,10 @@ class SearchViewModel(
     fun onQueryChange(newQuery: String) {
         _query.value = newQuery
         if (newQuery.isBlank()) {
+            searchJob?.cancel()
             _uiState.value = SearchUiState.Idle
             _results.value = emptyList()
+            _catalogResult.value = CatalogSearchResult()
             _error.value = null
         }
     }
@@ -125,21 +139,37 @@ class SearchViewModel(
     }
 
     private fun performSearch(plugin: SourcePlugin, currentQuery: String) {
-        viewModelScope.launch {
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
             _isSearching.value = true
             _error.value = null
             _uiState.value = SearchUiState.Loading
 
             try {
-                // Сайты могут вернуть один трек дважды — дубли рушат LazyColumn по key=id
-                val tracks = plugin.search(currentQuery).distinctBy { it.id }
-                _results.value = tracks
+                val (tracks, catalog) = coroutineScope {
+                    val catalogDeferred = async {
+                        try {
+                            catalogRepository?.searchCatalog(currentQuery) ?: CatalogSearchResult()
+                        } catch (_: Exception) {
+                            CatalogSearchResult()
+                        }
+                    }
+                    val tracksDeferred = async {
+                        plugin.search(currentQuery).distinctBy { it.id }
+                    }
+                    tracksDeferred.await() to catalogDeferred.await()
+                }
 
-                if (tracks.isEmpty()) {
+                _results.value = tracks
+                _catalogResult.value = catalog
+
+                if (tracks.isEmpty() && catalog.artists.isEmpty() && catalog.albums.isEmpty()) {
                     _uiState.value = SearchUiState.Empty("По запросу «$currentQuery» ничего не найдено")
                 } else {
                     _uiState.value = SearchUiState.Success(tracks)
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: PluginException.NoConnection) {
                 _error.value = e.message
                 _uiState.value = SearchUiState.Error(
@@ -147,6 +177,7 @@ class SearchViewModel(
                     canRetry = true
                 )
                 _results.value = emptyList()
+                _catalogResult.value = CatalogSearchResult()
             } catch (e: PluginException.ServerUnavailable) {
                 _error.value = e.message
                 _uiState.value = SearchUiState.Error(
@@ -154,6 +185,7 @@ class SearchViewModel(
                     canRetry = true
                 )
                 _results.value = emptyList()
+                _catalogResult.value = CatalogSearchResult()
             } catch (e: PluginException.ParseError) {
                 _error.value = e.message
                 _uiState.value = SearchUiState.Error(
@@ -161,6 +193,7 @@ class SearchViewModel(
                     canRetry = false
                 )
                 _results.value = emptyList()
+                _catalogResult.value = CatalogSearchResult()
             } catch (e: Exception) {
                 _error.value = e.message
                 _uiState.value = SearchUiState.Error(
@@ -168,6 +201,7 @@ class SearchViewModel(
                     canRetry = true
                 )
                 _results.value = emptyList()
+                _catalogResult.value = CatalogSearchResult()
             } finally {
                 _isSearching.value = false
             }

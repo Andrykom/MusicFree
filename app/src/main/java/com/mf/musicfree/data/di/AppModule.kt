@@ -38,6 +38,8 @@ import kotlinx.serialization.json.Json
 import org.koin.android.ext.koin.androidContext
 import org.koin.androidx.viewmodel.dsl.viewModel
 import org.koin.dsl.module
+import com.mf.musicfree.data.repository.CatalogRepository
+import com.mf.musicfree.ui.catalog.CatalogViewModel
 
 val appModule = module {
     single {
@@ -111,10 +113,12 @@ val appModule = module {
     single { PlaylistWebExtractor() }
     single { MusicImportService(get(), get(), get()) }
     single { com.mf.musicfree.data.download.DownloadManager(get(), get()) }
+    single { CatalogRepository(get(), get(), get(), get()) }
 
-    viewModel { PlayerViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), getOrNull()) }
-    viewModel { SearchViewModel(get(), get(), get(), get(), get(), getOrNull()) }
-    viewModel { LibraryViewModel(get(), get(), get(), get(), get(), getOrNull()) }
+    viewModel { PlayerViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    viewModel { SearchViewModel(get(), get(), get(), get(), get(), get(), get()) }
+    viewModel { LibraryViewModel(get(), get(), get(), get(), get(), get()) }
+    viewModel { CatalogViewModel(get(), get(), get()) }
     viewModel { (playlistId: String) ->
         PlaylistDetailViewModel(playlistId, get(), get())
     }

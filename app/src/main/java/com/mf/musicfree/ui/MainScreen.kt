@@ -29,7 +29,10 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.mf.musicfree.data.repository.CatalogRepository
 import com.mf.musicfree.player.PlayerViewModel
+import com.mf.musicfree.ui.catalog.AlbumDetailScreen
+import com.mf.musicfree.ui.catalog.ArtistDetailScreen
 import com.mf.musicfree.ui.library.LibraryScreen
 import com.mf.musicfree.ui.library.PlaylistDetailScreen
 import com.mf.musicfree.ui.navigation.BottomNavItem
@@ -37,17 +40,17 @@ import com.mf.musicfree.ui.player.FullPlayerScreen
 import com.mf.musicfree.ui.player.LyricsScreen
 import com.mf.musicfree.ui.player.MiniPlayer
 import com.mf.musicfree.ui.search.SearchScreen
-import com.mf.musicfree.ui.search.SearchViewModel
 import com.mf.musicfree.ui.settings.SettingsScreen
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.koinInject
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MainScreen() {
     val navController = rememberNavController()
     val playerViewModel = koinViewModel<PlayerViewModel>()
-    val searchViewModel = koinViewModel<SearchViewModel>()
+    val catalogRepository = koinInject<CatalogRepository>()
     val items = listOf(BottomNavItem.Library, BottomNavItem.Search, BottomNavItem.Settings)
 
     val pagerState = rememberPagerState(pageCount = { items.size })
@@ -92,6 +95,7 @@ fun MainScreen() {
                             items = items,
                             selectedIndex = pagerState.currentPage,
                             onSelect = { index ->
+                                navController.popBackStack("empty", inclusive = false)
                                 scope.launch { pagerState.animateScrollToPage(index) }
                             }
                         )
@@ -124,7 +128,7 @@ fun MainScreen() {
                     }
                 }
 
-                // NavHost только для детальных экранов (плейлисты) — прозрачный фон, чтобы пейджер был виден
+                // NavHost только для детальных экранов (плейлисты, исполнители, альбомы) — прозрачный фон, чтобы пейджер был виден
                 NavHost(
                     navController = navController,
                     startDestination = "empty",
@@ -144,6 +148,30 @@ fun MainScreen() {
                             playlistId = playlistId,
                             playerViewModel = playerViewModel,
                             onNavigateBack = { navController.popBackStack() }
+                        )
+                    }
+                    composable(
+                        route = "artist_detail/{artistKey}",
+                        arguments = listOf(navArgument("artistKey") { type = NavType.StringType })
+                    ) { backStackEntry ->
+                        val artistKey = backStackEntry.arguments?.getString("artistKey") ?: return@composable
+                        ArtistDetailScreen(
+                            artistKey = artistKey,
+                            playerViewModel = playerViewModel,
+                            onNavigateBack = { navController.popBackStack() },
+                            onOpenAlbum = { albumKey -> navController.navigate("album_detail/$albumKey") }
+                        )
+                    }
+                    composable(
+                        route = "album_detail/{albumKey}",
+                        arguments = listOf(navArgument("albumKey") { type = NavType.StringType })
+                    ) { backStackEntry ->
+                        val albumKey = backStackEntry.arguments?.getString("albumKey") ?: return@composable
+                        AlbumDetailScreen(
+                            albumKey = albumKey,
+                            playerViewModel = playerViewModel,
+                            onNavigateBack = { navController.popBackStack() },
+                            onOpenArtist = { artistKey -> navController.navigate("artist_detail/$artistKey") }
                         )
                     }
                 }
@@ -167,11 +195,11 @@ fun MainScreen() {
                     },
                     onArtistClick = { artist ->
                         showPlayer = false
-                        scope.launch {
-                            pagerState.animateScrollToPage(1)
-                            searchViewModel.onQueryChange(artist)
-                            searchViewModel.search()
-                        }
+                        val primaryArtist = artist
+                            .split(",", ";", " & ", " feat. ", " ft. ", ignoreCase = true)
+                            .firstOrNull()?.trim()?.ifBlank { artist } ?: artist
+                        val artistKey = catalogRepository.registerArtistByName(primaryArtist)
+                        navController.navigate("artist_detail/$artistKey")
                     }
                 )
             }

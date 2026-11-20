@@ -41,6 +41,12 @@ import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.ui.draw.clip
+import com.mf.musicfree.ui.catalog.AlbumCard
 
 @Composable
 fun SearchScreen(
@@ -49,6 +55,7 @@ fun SearchScreen(
     viewModel: SearchViewModel = koinViewModel(),
     pluginManager: PluginManager = koinInject()
 ) {
+    val catalogResult by viewModel.catalogResult.collectAsState()
     val query by viewModel.query.collectAsState()
     val results by viewModel.results.collectAsState()
     val isSearching by viewModel.isSearching.collectAsState()
