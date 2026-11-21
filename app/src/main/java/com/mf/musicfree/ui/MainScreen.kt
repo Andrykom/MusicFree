@@ -195,10 +195,7 @@ fun MainScreen() {
                     },
                     onArtistClick = { artist ->
                         showPlayer = false
-                        val primaryArtist = artist
-                            .split(",", ";", " & ", " feat. ", " ft. ", ignoreCase = true)
-                            .firstOrNull()?.trim()?.ifBlank { artist } ?: artist
-                        val artistKey = catalogRepository.registerArtistByName(primaryArtist)
+                        val artistKey = catalogRepository.registerArtistByName(artist.trim())
                         navController.navigate("artist_detail/$artistKey")
                     }
                 )

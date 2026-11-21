@@ -39,7 +39,8 @@ class PlaybackService : MediaSessionService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val trackRepository: TrackRepository by inject()
     private val playerController: PlayerController by inject()
-    private val bitmapCache = LruCache<String, Bitmap>(5)
+    private val bitmapCache = LruCache<String, Bitmap>(8)
+    private val imageLoader by lazy { ImageLoader(this) }
     private var currentCoverJob: Job? = null
     private var idleStopJob: Job? = null
 
@@ -50,7 +51,7 @@ class PlaybackService : MediaSessionService() {
         const val ACTION_PREV = "com.mf.musicfree.PREV"
         const val ACTION_PLAY_PAUSE = "com.mf.musicfree.PLAY_PAUSE"
         const val ACTION_NEXT = "com.mf.musicfree.NEXT"
-        private const val IDLE_TIMEOUT_MS = 15 * 60_000L // 15 минут паузы -> закрываем сервис и шторку
+        private const val IDLE_TIMEOUT_MS = 15 * 60_000L // 15 минут реальной паузы -> закрываем сервис
     }
 
     private var attachedPlayer: Player? = null
@@ -59,13 +60,22 @@ class PlaybackService : MediaSessionService() {
             attachedPlayer?.let { updateNotification(it) }
         }
 
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            val p = attachedPlayer ?: return
+            if (playbackState == Player.STATE_BUFFERING || p.isPlaying || p.playWhenReady) {
+                idleStopJob?.cancel()
+            } else {
+                scheduleIdleShutdown()
+            }
+        }
+
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             val p = attachedPlayer ?: return
             updateNotification(p)
-            if (isPlaying) {
+            if (isPlaying || p.playbackState == Player.STATE_BUFFERING || p.playWhenReady) {
                 idleStopJob?.cancel()
             } else {
-                scheduleIdleShutdown(p)
+                scheduleIdleShutdown()
             }
         }
     }
@@ -77,10 +87,10 @@ class PlaybackService : MediaSessionService() {
         player.addListener(servicePlayerListener)
         mediaSession?.setPlayer(player)
         updateNotification(player)
-        if (player.isPlaying) {
+        if (player.isPlaying || player.playWhenReady || player.playbackState == Player.STATE_BUFFERING) {
             idleStopJob?.cancel()
         } else {
-            scheduleIdleShutdown(player)
+            scheduleIdleShutdown()
         }
     }
 
@@ -98,35 +108,20 @@ class PlaybackService : MediaSessionService() {
         }
 
         super.onCreate()
-
-        player.addListener(object : Player.Listener {
-            override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
-                updateNotification(player)
-            }
-
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                updateNotification(player)
-                if (isPlaying) {
-                    idleStopJob?.cancel()
-                } else {
-                    scheduleIdleShutdown(player)
-                }
-            }
-        })
-
-        if (player.currentMediaItem != null) {
-            updateNotification(player)
-        }
-        if (!player.isPlaying) {
-            scheduleIdleShutdown(player)
-        }
     }
 
-    private fun scheduleIdleShutdown(player: Player) {
+    private fun scheduleIdleShutdown() {
         idleStopJob?.cancel()
         idleStopJob = serviceScope.launch {
             delay(IDLE_TIMEOUT_MS)
-            if (!player.isPlaying) {
+            val current = attachedPlayer
+            val isActive = current != null && (
+                    current.isPlaying ||
+                            current.playWhenReady ||
+                            current.playbackState == Player.STATE_BUFFERING ||
+                            playerController.isCrossfading()
+                    )
+            if (!isActive) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
@@ -222,18 +217,19 @@ class PlaybackService : MediaSessionService() {
                 currentCoverJob?.cancel()
                 currentCoverJob = serviceScope.launch(Dispatchers.IO) {
                     try {
-                        val loader = ImageLoader(this@PlaybackService)
                         val request = ImageRequest.Builder(this@PlaybackService)
                             .data(artworkUri)
                             .allowHardware(false)
                             .size(Size(512, 512))
                             .build()
-                        val result = loader.execute(request)
+                        val result = imageLoader.execute(request)
                         if (result is SuccessResult) {
                             val bmp = (result.drawable as? BitmapDrawable)?.bitmap
                             if (bmp != null) {
                                 bitmapCache.put(artworkUri, bmp)
-                                launch(Dispatchers.Main) { updateNotification(player) }
+                                launch(Dispatchers.Main) {
+                                    attachedPlayer?.let { updateNotification(it) }
+                                }
                             }
                         }
                     } catch (_: Exception) {}
@@ -298,7 +294,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        val player = mediaSession?.player
+        val player = attachedPlayer ?: mediaSession?.player
         if (player == null || !player.isPlaying) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()

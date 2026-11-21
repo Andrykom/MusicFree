@@ -1,5 +1,6 @@
 package com.mf.musicfree.ui.player
 
+import android.annotation.SuppressLint
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -46,6 +47,7 @@ private fun findActiveLineIndex(lines: List<LyricsLine>, positionMs: Long): Int 
     return result
 }
 
+@SuppressLint("UnusedBoxWithConstraintsScope")
 @Composable
 fun LyricsScreen(
     viewModel: PlayerViewModel,

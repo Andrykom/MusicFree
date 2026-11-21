@@ -119,6 +119,7 @@ class PlayerViewModel(
     val playbackErrorEvent: SharedFlow<String> = _playbackErrorEvent.asSharedFlow()
 
     private var lyricsJob: Job? = null
+    private var loadedLyricsTrackId: String? = null
     private var lastRetriedUrlTrackId: String? = null
     private var lastPersistedPosMs: Long = -1L
 
@@ -163,9 +164,8 @@ class PlayerViewModel(
             val safeIdx = index.coerceIn(-1, queue.lastIndex)
             _currentIndex.value = safeIdx
             val track = queue.getOrNull(safeIdx)
-            val prevId = _currentTrack.value?.id
             _currentTrack.value = track
-            if (track != null && track.id != prevId) {
+            if (track != null && track.id != loadedLyricsTrackId) {
                 loadLyrics(track)
                 loadCoverIfMissing(track)
             }
@@ -699,6 +699,14 @@ class PlayerViewModel(
         _currentTrack.value = tracks[safeIdx]
         _currentPosition.value = 0L
         _progress.value = 0f
+        _queue.value = tracks
+        _currentIndex.value = safeIdx
+        _currentTrack.value = tracks[safeIdx]
+        _currentPosition.value = 0L
+        _progress.value = 0f
+
+        loadLyrics(tracks[safeIdx])
+        loadCoverIfMissing(tracks[safeIdx])
 
         playerController.setQueue(tracks, safeIdx, 0L)
         playerController.play()
@@ -937,7 +945,15 @@ class PlayerViewModel(
 
     // ─── Тексты ───
 
-    private fun loadLyrics(track: Track) {
+    // ─── Тексты ───
+
+    private fun loadLyrics(track: Track, force: Boolean = false) {
+        if (!force && track.id == loadedLyricsTrackId &&
+            (_lyricsState.value is LyricsUiState.Success || _lyricsState.value is LyricsUiState.Loading)
+        ) {
+            return
+        }
+        loadedLyricsTrackId = track.id
         lyricsJob?.cancel()
         lyricsJob = viewModelScope.launch {
             _isLyricsLoading.value = true
@@ -950,13 +966,17 @@ class PlayerViewModel(
                     album = track.album,
                     duration = (track.duration / 1000).toInt()
                 )
+                if (_currentTrack.value?.id != track.id) return@launch
                 if (result != null) {
                     _currentLyrics.value = result
                     _lyricsState.value = LyricsUiState.Success(result)
                 } else {
                     _lyricsState.value = LyricsUiState.Empty
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: java.io.IOException) {
+                if (_currentTrack.value?.id != track.id) return@launch
                 val msg = when {
                     e.message?.contains("Timeout", ignoreCase = true) == true ->
                         "Превышено время ожидания"
@@ -964,17 +984,21 @@ class PlayerViewModel(
                 }
                 _lyricsState.value = LyricsUiState.Error(msg)
             } catch (e: Exception) {
+                if (_currentTrack.value?.id != track.id) return@launch
                 _lyricsState.value = LyricsUiState.Error("Ошибка загрузки текста")
             } finally {
-                _isLyricsLoading.value = false
+                if (_currentTrack.value?.id == track.id) {
+                    _isLyricsLoading.value = false
+                }
             }
         }
     }
 
     fun retryLyrics() {
         val track = _currentTrack.value ?: return
-        loadLyrics(track)
+        loadLyrics(track, force = true)
     }
+
 
     private fun SearchTrack.toTrack() = Track(
         id = id,

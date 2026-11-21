@@ -182,6 +182,7 @@ class PlayerController(private val context: Context) {
         return ExoPlayer.Builder(context)
             .setAudioAttributes(musicAudioAttributes, handleAudioFocus)
             .setHandleAudioBecomingNoisy(handleAudioFocus)
+            .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
     }
 

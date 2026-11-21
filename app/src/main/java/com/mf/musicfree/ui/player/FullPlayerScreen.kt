@@ -41,6 +41,8 @@ import com.mf.musicfree.ui.components.AddToPlaylistDialog
 import com.mf.musicfree.ui.components.TrackCover
 import com.mf.musicfree.util.formatDuration
 import kotlinx.coroutines.launch
+import com.mf.musicfree.ui.components.ClickableArtistsText
+import androidx.compose.ui.graphics.Color
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -105,9 +107,20 @@ fun FullPlayerScreen(
                     )
                 }
         ) {
+            CoverAuraBackground(
+                coverUrl = track.coverUrl,
+                isPlaying = isPlaying,
+                modifier = Modifier.fillMaxSize()
+            )
+
             Scaffold(
+                containerColor = Color.Transparent,
+                contentColor = MaterialTheme.colorScheme.onBackground,
                 topBar = {
                     TopAppBar(
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = Color.Transparent
+                        ),
                         title = { Text("Сейчас играет") },
                         navigationIcon = {
                             IconButton(onClick = onBack) {
@@ -172,14 +185,14 @@ fun FullPlayerScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = track.artist,
+                        Spacer(modifier = Modifier.height(4.dp))
+                        ClickableArtistsText(
+                            rawArtist = track.artist,
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.primary,
                             textAlign = TextAlign.Center,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.clickable { onArtistClick(track.artist) }
+                            maxLines = 2,
+                            onArtistClick = { singleArtist -> onArtistClick(singleArtist) }
                         )
                     }
 

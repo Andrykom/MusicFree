@@ -25,6 +25,7 @@ import com.mf.musicfree.player.PlayerViewModel
 import com.mf.musicfree.ui.components.TrackCover
 import com.mf.musicfree.ui.search.SearchResultItem
 import org.koin.androidx.compose.koinViewModel
+import com.mf.musicfree.ui.components.FullScreenImageDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -41,6 +42,7 @@ fun ArtistDetailScreen(
     val downloadedIds by viewModel.downloadedIds.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+    var showFullPhoto by remember { mutableStateOf(false) }
 
     LaunchedEffect(artistKey) {
         viewModel.loadArtist(artistKey)
@@ -115,6 +117,14 @@ fun ArtistDetailScreen(
                 val playableTracks = data.allZvuchTracks.ifEmpty { data.singles }
                 val displayedSingles = data.singles.ifEmpty { data.allZvuchTracks }
 
+                if (showFullPhoto && !data.artist.pictureUrl.isNullOrBlank()) {
+                    FullScreenImageDialog(
+                        imageUrl = data.artist.pictureUrl,
+                        title = data.artist.name,
+                        onDismiss = { showFullPhoto = false }
+                    )
+                }
+
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
@@ -135,6 +145,9 @@ fun ArtistDetailScreen(
                                 modifier = Modifier
                                     .size(120.dp)
                                     .clip(CircleShape)
+                                    .clickable(enabled = !data.artist.pictureUrl.isNullOrBlank()) {
+                                        showFullPhoto = true
+                                    }
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
@@ -213,7 +226,7 @@ fun ArtistDetailScreen(
                     if (displayedSingles.isNotEmpty()) {
                         item(key = "singles_header") {
                             Text(
-                                text = if (data.singles.isNotEmpty()) "Синглы и треки" else "Треки",
+                                text = if (data.singles.isNotEmpty()) "Синглы и фиты" else "Треки",
                                 style = MaterialTheme.typography.titleMedium,
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                             )

@@ -10,8 +10,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PlayArrow
@@ -29,6 +27,8 @@ import com.mf.musicfree.player.PlayerViewModel
 import com.mf.musicfree.ui.components.TrackCover
 import com.mf.musicfree.util.formatDuration
 import org.koin.androidx.compose.koinViewModel
+import com.mf.musicfree.ui.components.ClickableArtistsText
+import com.mf.musicfree.ui.components.FullScreenImageDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,6 +47,7 @@ fun AlbumDetailScreen(
     val downloadedIds by viewModel.downloadedIds.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+    var showFullCover by remember { mutableStateOf(false) }
 
     LaunchedEffect(albumKey) {
         viewModel.loadAlbum(albumKey)
@@ -120,6 +121,14 @@ fun AlbumDetailScreen(
                 val album = ui.album
                 val tracks = ui.tracks
 
+                if (showFullCover && !album.coverUrl.isNullOrBlank()) {
+                    FullScreenImageDialog(
+                        imageUrl = album.coverUrl,
+                        title = album.title,
+                        onDismiss = { showFullCover = false }
+                    )
+                }
+
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
@@ -140,6 +149,9 @@ fun AlbumDetailScreen(
                                 modifier = Modifier
                                     .size(200.dp)
                                     .clip(RoundedCornerShape(16.dp))
+                                    .clickable(enabled = !album.coverUrl.isNullOrBlank()) {
+                                        showFullCover = true
+                                    }
                             )
                             Spacer(modifier = Modifier.height(14.dp))
                             Text(
@@ -377,44 +389,6 @@ private fun AlbumTrackRow(
                         tint = if (isInLibrary) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(22.dp)
                     )
-                }
-
-                if (downloadProgress != null && !isDownloaded) {
-                    Box(
-                        modifier = Modifier.size(40.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (downloadProgress > 0) {
-                            CircularProgressIndicator(
-                                progress = { downloadProgress / 100f },
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.5.dp
-                            )
-                        } else {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.5.dp
-                            )
-                        }
-                    }
-                } else if (isDownloaded) {
-                    IconButton(onClick = onDeleteDownload) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = "Скачано",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                } else {
-                    IconButton(onClick = onDownload) {
-                        Icon(
-                            imageVector = Icons.Default.Download,
-                            contentDescription = "Скачать",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
                 }
             }
         }

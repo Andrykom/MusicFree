@@ -422,44 +422,6 @@ fun SearchResultItem(
                         modifier = Modifier.size(22.dp)
                     )
                 }
-
-                if (downloadProgress != null && !isDownloaded) {
-                    Box(
-                        modifier = Modifier.size(40.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (downloadProgress > 0) {
-                            CircularProgressIndicator(
-                                progress = { downloadProgress / 100f },
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.5.dp
-                            )
-                        } else {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.5.dp
-                            )
-                        }
-                    }
-                } else if (isDownloaded) {
-                    IconButton(onClick = onDeleteDownloadedFile) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = "Скачано (нажмите для удаления файла)",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                } else {
-                    IconButton(onClick = onDownload) {
-                        Icon(
-                            imageVector = Icons.Default.Download,
-                            contentDescription = "Скачать",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                }
             }
         }
         Box(modifier = Modifier.align(Alignment.CenterEnd)) {

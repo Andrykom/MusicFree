@@ -479,6 +479,10 @@ class CatalogRepository(
         val inside = match.groupValues[2].trim()
         if (baseTitle.isBlank() || inside.length < 2) return rawTitle.trim() to null
 
+        // Если в скобках только цифры/год/знаки (например, "2021", "2022", "2023", "18+"), это не альбом
+        val isDigitsOrYear = inside.all { it.isDigit() || it in " -–—.+/" }
+        if (isDigitsOrYear) return rawTitle.trim() to null
+
         val lowerInside = inside.lowercase()
         val isNonAlbum = nonAlbumMarkers.any { lowerInside.contains(it) }
         return if (isNonAlbum) {
