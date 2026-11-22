@@ -368,6 +368,19 @@ class PlayerController(private val context: Context) {
         onQueueChange?.invoke(trackQueue)
     }
 
+    /**
+     * Тихо обновляет трек в очереди (например, когда в фоне догрузился audioUrl),
+     * не прерывая текущее воспроизведение.
+     */
+    fun updateTrackInQueue(index: Int, track: Track) {
+        if (index !in trackQueue.indices) return
+        trackQueue = trackQueue.toMutableList().apply { set(index, track) }
+        val player = activePlayer
+        if (player != null && index != getCurrentIndex() && index < player.mediaItemCount) {
+            player.replaceMediaItem(index, track.toMediaItem())
+        }
+    }
+
     fun getCrossfadeSeconds(): Int = crossfadeSeconds
     fun isCrossfading(): Boolean = isCrossfading
 

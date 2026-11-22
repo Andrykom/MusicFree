@@ -16,6 +16,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -44,14 +45,16 @@ import com.mf.musicfree.ui.settings.SettingsScreen
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import com.mf.musicfree.ui.wave.WaveScreen
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen() {
     val navController = rememberNavController()
     val playerViewModel = koinViewModel<PlayerViewModel>()
     val catalogRepository = koinInject<CatalogRepository>()
-    val items = listOf(BottomNavItem.Library, BottomNavItem.Search, BottomNavItem.Settings)
+    val items = listOf(BottomNavItem.Library, BottomNavItem.Wave, BottomNavItem.Search)
 
     val pagerState = rememberPagerState(pageCount = { items.size })
     val scope = rememberCoroutineScope()
@@ -120,11 +123,11 @@ fun MainScreen() {
                             playerViewModel = playerViewModel,
                             onNavigate = { navController.navigate(it) }
                         )
-                        1 -> SearchScreen(
+                        1 -> WaveScreen(playerViewModel = playerViewModel)
+                        2 -> SearchScreen(
                             playerViewModel = playerViewModel,
                             onNavigate = { navController.navigate(it) }
                         )
-                        2 -> SettingsScreen()
                     }
                 }
 
@@ -162,6 +165,31 @@ fun MainScreen() {
                             onOpenAlbum = { albumKey -> navController.navigate("album_detail/$albumKey") }
                         )
                     }
+
+                    composable("settings") {
+                        Scaffold(
+                            topBar = {
+                                TopAppBar(
+                                    windowInsets = WindowInsets(0, 0, 0, 0),
+                                    title = { Text("Настройки") },
+                                    navigationIcon = {
+                                        IconButton(onClick = { navController.popBackStack() }) {
+                                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                                        }
+                                    }
+                                )
+                            }
+                        ) { settingsPadding ->
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(settingsPadding)
+                            ) {
+                                SettingsScreen()
+                            }
+                        }
+                    }
+
                     composable(
                         route = "album_detail/{albumKey}",
                         arguments = listOf(navArgument("albumKey") { type = NavType.StringType })
@@ -197,7 +225,13 @@ fun MainScreen() {
                         showPlayer = false
                         val artistKey = catalogRepository.registerArtistByName(artist.trim())
                         navController.navigate("artist_detail/$artistKey")
+                    },
+                    onAlbumClick = { artist, albumTitle ->
+                        showPlayer = false
+                        val albumKey = catalogRepository.registerAlbumByName(artist, albumTitle)
+                        navController.navigate("album_detail/$albumKey")
                     }
+
                 )
             }
         }

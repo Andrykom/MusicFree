@@ -48,6 +48,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.material.icons.filled.Settings
 
 @Composable
 fun LibraryScreen(
@@ -96,7 +97,7 @@ fun LibraryScreen(
                 }
             }
 
-            // 2. Лупа поверх пустого левого края TabRow (не сдвигает вкладки)
+            // 2. Лупа поверх пустого левого края TabRow (слева от «Треков»)
             IconButton(
                 onClick = { isSearchExpanded = true },
                 modifier = Modifier
@@ -110,7 +111,21 @@ fun LibraryScreen(
                 )
             }
 
-            // 3. Поисковая строка — при нажатии на лупу растягивается на всю ширину
+            // 3. Настройки поверх пустого правого края TabRow (справа от «Плейлистов»)
+            IconButton(
+                onClick = { onNavigate("settings") },
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 4.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = "Настройки",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // 4. Поисковая строка — при нажатии на лупу растягивается на всю ширину поверх всего
             this@Column.AnimatedVisibility(
                 visible = isSearchExpanded,
                 enter = expandHorizontally(
@@ -182,7 +197,6 @@ fun LibraryScreen(
                 }
             }
         }
-
         when (selectedTab) {
             0 -> TracksTab(playerViewModel, viewModel)
             1 -> PlaylistsTab(viewModel, onNavigate)

@@ -50,7 +50,8 @@ fun FullPlayerScreen(
     viewModel: PlayerViewModel,
     onBack: () -> Unit,
     onLyrics: () -> Unit,
-    onArtistClick: (String) -> Unit = {}
+    onArtistClick: (String) -> Unit = {},
+    onAlbumClick: (artist: String, albumTitle: String) -> Unit = { _, _ -> }
 ) {
     val currentTrack by viewModel.currentTrack.collectAsState()
     val isPlaying by viewModel.isPlaying.collectAsState()
@@ -121,10 +122,34 @@ fun FullPlayerScreen(
                         colors = TopAppBarDefaults.topAppBarColors(
                             containerColor = Color.Transparent
                         ),
-                        title = { Text("Сейчас играет") },
                         navigationIcon = {
                             IconButton(onClick = onBack) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад")
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                            }
+                        },
+                        title = {
+                            val albumTitle = track.album?.takeIf { it.isNotBlank() }
+                            if (albumTitle != null) {
+                                Column(
+                                    modifier = Modifier.clickable {
+                                        onAlbumClick(track.artist, albumTitle)
+                                    }
+                                ) {
+                                    Text(
+                                        text = "Из альбома",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1
+                                    )
+                                    Text(
+                                        text = albumTitle,
+                                        style = MaterialTheme.typography.titleLarge,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            } else {
+                                Text("Сейчас играет")
                             }
                         },
                         actions = {

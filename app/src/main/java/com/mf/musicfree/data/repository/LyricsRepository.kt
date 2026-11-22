@@ -15,6 +15,9 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeoutOrNull
 
 class LyricsRepository(
     private val neteaseApi: NeteaseApi,
@@ -71,103 +74,94 @@ class LyricsRepository(
             Log.w("LyricsRepository", "Disk read failed: ${e.message}")
         }
 
-        // Сеть — с таймаутом на всю цепочку (30с для слабого интернета)
+        // Сеть: параллельный опрос с жёстким таймаутом на каждый источник (защита от зависаний на RU IP)
         val result: TrackLyrics? = try {
-            withTimeout(30_000) {
-                val cleanTitle = cleanTitle(title)
+            withTimeout(14_000) {
+                val clean = cleanTitle(title)
                 var hadNetworkError = false
                 fun markNetwork(e: Throwable) {
                     if (e.isNetworkError()) hadNetworkError = true
                 }
 
-                suspend fun fetch(a: String, t: String): TrackLyrics? {
-                    // 1. Netease
-                    try {
-                        Log.d("LyricsRepository", "Try Netease: $a - $t")
-                        val lrc = neteaseApi.getLyrics(a, t)
-                        if (!lrc.isNullOrBlank()) {
-                            val lines = parseLrc(lrc)
-                            if (lines.isNotEmpty()) {
-                                Log.d("LyricsRepository", "Netease hit: $a - $t (${lines.size} lines)")
-                                return TrackLyrics(lines = lines, isSynced = true)
+                suspend fun fetchParallel(a: String, t: String): TrackLyrics? = coroutineScope {
+                    val neteaseDef = async {
+                        withTimeoutOrNull(4_500) {
+                            try {
+                                val lrc = neteaseApi.getLyrics(a, t)
+                                if (!lrc.isNullOrBlank()) {
+                                    val lines = parseLrc(lrc)
+                                    if (lines.isNotEmpty()) TrackLyrics(lines = lines, isSynced = true) else null
+                                } else null
+                            } catch (e: Exception) {
+                                Log.w("LyricsRepository", "Netease failed: ${e.message}")
+                                markNetwork(e)
+                                null
                             }
                         }
-                        Log.d("LyricsRepository", "Netease miss: $a - $t")
-                    } catch (e: Exception) {
-                        Log.w("LyricsRepository", "Netease failed for $a - $t: ${e.message}")
-                        markNetwork(e)
                     }
 
-                    // 2. LRCLIB без duration
-                    try {
-                        Log.d("LyricsRepository", "Try LrcLib(noDur): $a - $t")
-                        val resp = lrcLibApi.getLyrics(a, t, album, null)
-                        parseLrcLibResponse(resp)?.let {
-                            Log.d("LyricsRepository", "LrcLib(noDur) hit: $a - $t")
-                            return it
+                    val lrcLibDef = async {
+                        withTimeoutOrNull(4_500) {
+                            try {
+                                val resp = lrcLibApi.getLyrics(a, t, album, null)
+                                    ?: if (duration != null && duration > 0) {
+                                        lrcLibApi.getLyrics(a, t, album, duration)
+                                    } else null
+                                parseLrcLibResponse(resp)
+                            } catch (e: Exception) {
+                                Log.w("LyricsRepository", "LrcLib failed: ${e.message}")
+                                markNetwork(e)
+                                null
+                            }
                         }
-                        Log.d("LyricsRepository", "LrcLib(noDur) miss: $a - $t")
-                    } catch (e: Exception) {
-                        Log.w("LyricsRepository", "LrcLib(noDur) failed for $a - $t: ${e.message}")
-                        markNetwork(e)
                     }
 
-                    // 3. LRCLIB с duration
-                    if (duration != null && duration > 0) {
+                    val kugouDef = async {
+                        withTimeoutOrNull(4_500) {
+                            try {
+                                val lrc = kugouApi.getLyrics(a, t, duration?.times(1000)?.toLong())
+                                if (!lrc.isNullOrBlank()) {
+                                    val lines = parseLrc(lrc)
+                                    if (lines.isNotEmpty()) TrackLyrics(lines = lines, isSynced = true) else null
+                                } else null
+                            } catch (e: Exception) {
+                                Log.w("LyricsRepository", "Kugou failed: ${e.message}")
+                                markNetwork(e)
+                                null
+                            }
+                        }
+                    }
+
+                    val lrcLibRes = lrcLibDef.await()
+                    val neteaseRes = neteaseDef.await()
+                    val kugouRes = kugouDef.await()
+
+                    // Приоритет: синхронизированный текст (LrcLib -> Netease -> Kugou), затем plain из LrcLib
+                    val bestSynced = listOfNotNull(lrcLibRes, neteaseRes, kugouRes)
+                        .firstOrNull { it.isSynced }
+                    if (bestSynced != null) return@coroutineScope bestSynced
+                    if (lrcLibRes != null) return@coroutineScope lrcLibRes
+
+                    // Фолбэк на Genius с коротким таймаутом
+                    val geniusRes = withTimeoutOrNull(4_500) {
                         try {
-                            Log.d("LyricsRepository", "Try LrcLib(dur=$duration): $a - $t")
-                            val resp = lrcLibApi.getLyrics(a, t, album, duration)
-                            parseLrcLibResponse(resp)?.let {
-                                Log.d("LyricsRepository", "LrcLib(dur) hit: $a - $t")
-                                return it
-                            }
-                            Log.d("LyricsRepository", "LrcLib(dur) miss: $a - $t")
+                            val text = geniusApi.getLyrics(a, t)
+                            if (!text.isNullOrBlank()) createPlainTextLyrics(text) else null
                         } catch (e: Exception) {
-                            Log.w("LyricsRepository", "LrcLib(dur) failed for $a - $t: ${e.message}")
+                            Log.w("LyricsRepository", "Genius failed: ${e.message}")
                             markNetwork(e)
+                            null
                         }
                     }
-
-                    // 4. Kugou
-                    try {
-                        Log.d("LyricsRepository", "Try Kugou: $a - $t")
-                        val lrc = kugouApi.getLyrics(a, t, duration?.times(1000)?.toLong())
-                        if (!lrc.isNullOrBlank()) {
-                            val lines = parseLrc(lrc)
-                            if (lines.isNotEmpty()) {
-                                Log.d("LyricsRepository", "Kugou hit: $a - $t (${lines.size} lines)")
-                                return TrackLyrics(lines = lines, isSynced = true)
-                            }
-                        }
-                        Log.d("LyricsRepository", "Kugou miss: $a - $t")
-                    } catch (e: Exception) {
-                        Log.w("LyricsRepository", "Kugou failed for $a - $t: ${e.message}")
-                        markNetwork(e)
-                    }
-
-                    // 5. Genius (plain)
-                    try {
-                        Log.d("LyricsRepository", "Try Genius: $a - $t")
-                        val text = geniusApi.getLyrics(a, t)
-                        if (!text.isNullOrBlank()) {
-                            Log.d("LyricsRepository", "Genius hit: $a - $t (${text.length} chars)")
-                            return createPlainTextLyrics(text)
-                        }
-                        Log.d("LyricsRepository", "Genius miss: $a - $t")
-                    } catch (e: Exception) {
-                        Log.w("LyricsRepository", "Genius failed for $a - $t: ${e.message}")
-                        markNetwork(e)
-                    }
+                    if (geniusRes != null) return@coroutineScope geniusRes
 
                     if (hadNetworkError) throw IOException("No connection")
-                    return null
+                    null
                 }
 
-                var res = fetch(artist, cleanTitle)
-                if (res == null && cleanTitle != title) {
-                    Log.d("LyricsRepository", "Clean title miss, retry original: $title")
-                    // Сбрасываем флаг, вторая попытка отдельно
-                    res = fetch(artist, title)
+                var res = fetchParallel(artist, clean)
+                if (res == null && clean != title) {
+                    res = fetchParallel(artist, title)
                 }
                 res
             }

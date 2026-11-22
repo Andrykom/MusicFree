@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -59,6 +60,13 @@ class CatalogViewModel(
     val libraryIds: StateFlow<Set<String>> = trackRepository.getAllTracks()
         .map { list -> list.map { it.id }.toSet() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+
+    val libraryTitleKeys: StateFlow<Set<String>> = trackRepository.getAllTracks()
+        .map { list -> list.map { trackKey(it.artist, it.title) }.toSet() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+
+    fun trackKey(artist: String, title: String): String =
+        "${artist.lowercase().replace('ё', 'е').trim()}|${title.lowercase().replace('ё', 'е').trim()}"
 
     val downloadedIds: StateFlow<Set<String>> = trackRepository.getAllTracks()
         .map { list -> list.filter { it.isDownloaded }.map { it.id }.toSet() }
@@ -109,15 +117,40 @@ class CatalogViewModel(
      * Запускает выбранный трек альбома. Если аудиопоток ещё не сопоставлен,
      * лениво находит его через плагины и кэширует в состоянии экрана.
      */
-    fun playAlbumTrack(index: Int, onPlayQueue: (List<SearchTrack>, Int) -> Unit) {
+    private fun buildFullAlbumTracks(album: AlbumInfo, items: List<AlbumTrackItem>): List<Track> {
+        return items.mapIndexed { idx, item ->
+            val resolved = item.resolvedTrack
+            if (resolved != null && !resolved.audioUrl.isNullOrBlank()) {
+                resolved.toTrack().copy(
+                    album = album.title,
+                    coverUrl = album.coverUrl ?: resolved.coverUrl
+                )
+            } else {
+                Track(
+                    id = "alb_${album.id}_${idx}_${item.title.hashCode().toUInt()}",
+                    title = item.title,
+                    artist = item.artist.ifBlank { album.artistName },
+                    album = album.title,
+                    duration = item.durationMs,
+                    coverUrl = album.coverUrl ?: item.coverUrl,
+                    sourceUrl = null,
+                    isDownloaded = false
+                )
+            }
+        }
+    }
+
+    /**
+     * Запускает выбранный трек альбома и сразу кладёт ВЕСЬ альбом в очередь.
+     * Недогруженные треки догружаются в фоне внутри PlayerViewModel.
+     */
+    fun playAlbumTrack(index: Int, onPlayQueue: (List<Track>, Int) -> Unit) {
         val current = _albumState.value as? AlbumUiState.Success ?: return
         val item = current.tracks.getOrNull(index) ?: return
 
-        val existing = item.resolvedTrack
-        if (existing != null) {
-            val resolvedQueue = current.tracks.mapNotNull { it.resolvedTrack }
-            val playIdx = resolvedQueue.indexOfFirst { it.id == existing.id }.coerceAtLeast(0)
-            onPlayQueue(resolvedQueue, playIdx)
+        if (item.resolvedTrack != null) {
+            val fullQueue = buildFullAlbumTracks(current.album, current.tracks)
+            onPlayQueue(fullQueue, index)
             return
         }
 
@@ -139,9 +172,8 @@ class CatalogViewModel(
                 }
                 _albumState.value = current.copy(tracks = updatedTracks)
 
-                val resolvedQueue = updatedTracks.mapNotNull { it.resolvedTrack }
-                val playIdx = resolvedQueue.indexOfFirst { it.id == found.id }.coerceAtLeast(0)
-                onPlayQueue(resolvedQueue, playIdx)
+                val fullQueue = buildFullAlbumTracks(current.album, updatedTracks)
+                onPlayQueue(fullQueue, index)
             } finally {
                 _resolvingTrackIndex.value = null
             }
@@ -150,14 +182,19 @@ class CatalogViewModel(
 
     /**
      * Запускает весь альбом (по порядку или вперемешку).
-     * Если ни один трек ещё не привязан — резолвит треки по очереди.
+     * Резолвит только первый трек для мгновенного старта, остальные догружаются в фоне.
      */
-    fun playWholeAlbum(shuffle: Boolean, onPlayQueue: (List<SearchTrack>, Int) -> Unit) {
+    fun playWholeAlbum(shuffle: Boolean, onPlayQueue: (List<Track>, Int) -> Unit) {
         val current = _albumState.value as? AlbumUiState.Success ?: return
-        val alreadyResolved = current.tracks.mapNotNull { it.resolvedTrack }
-        if (alreadyResolved.isNotEmpty()) {
-            val queue = if (shuffle) alreadyResolved.shuffled() else alreadyResolved
-            onPlayQueue(queue, 0)
+        if (current.tracks.isEmpty()) return
+
+        val orderedIndices = current.tracks.indices.toList().let { if (shuffle) it.shuffled() else it }
+        val firstIdx = orderedIndices.first()
+        val firstItem = current.tracks[firstIdx]
+
+        if (firstItem.resolvedTrack != null) {
+            val reorderedItems = orderedIndices.map { current.tracks[it] }
+            onPlayQueue(buildFullAlbumTracks(current.album, reorderedItems), 0)
             return
         }
 
@@ -165,28 +202,22 @@ class CatalogViewModel(
         viewModelScope.launch {
             _isResolvingAlbum.value = true
             try {
-                val updated = current.tracks.toMutableList()
-                for (i in updated.indices.take(20)) {
-                    val item = updated[i]
-                    if (item.resolvedTrack == null) {
-                        val found = catalogRepository.resolveTrackStream(
-                            artist = item.artist.ifBlank { current.album.artistName },
-                            title = item.title,
-                            coverUrl = item.coverUrl ?: current.album.coverUrl
-                        )
-                        if (found != null) {
-                            updated[i] = item.copy(resolvedTrack = found)
-                        }
-                    }
+                val found = catalogRepository.resolveTrackStream(
+                    artist = firstItem.artist.ifBlank { current.album.artistName },
+                    title = firstItem.title,
+                    coverUrl = firstItem.coverUrl ?: current.album.coverUrl
+                )
+                if (found == null) {
+                    _messageEvent.tryEmit("Не удалось найти «${firstItem.title}» на источниках")
+                    return@launch
                 }
-                _albumState.value = current.copy(tracks = updated)
-                val resolved = updated.mapNotNull { it.resolvedTrack }
-                if (resolved.isNotEmpty()) {
-                    val queue = if (shuffle) resolved.shuffled() else resolved
-                    onPlayQueue(queue, 0)
-                } else {
-                    _messageEvent.tryEmit("Не удалось найти треки этого альбома")
+                val updatedTracks = current.tracks.toMutableList().apply {
+                    set(firstIdx, firstItem.copy(resolvedTrack = found))
                 }
+                _albumState.value = current.copy(tracks = updatedTracks)
+
+                val reorderedItems = orderedIndices.map { updatedTracks[it] }
+                onPlayQueue(buildFullAlbumTracks(current.album, reorderedItems), 0)
             } finally {
                 _isResolvingAlbum.value = false
             }
@@ -227,7 +258,7 @@ class CatalogViewModel(
         }
     }
 
-    fun toggleLibrary(searchTrack: SearchTrack) {
+    fun toggleLibrary(searchTrack: SearchTrack, albumTitle: String? = null) {
         viewModelScope.launch {
             val inLib = searchTrack.id in libraryIds.value
             if (inLib) {
@@ -240,9 +271,36 @@ class CatalogViewModel(
                 }
                 _messageEvent.tryEmit("«${searchTrack.title}» удалён из Моей музыки")
             } else {
-                trackRepository.ensureTrackExists(searchTrack.toTrack())
+                trackRepository.ensureTrackExists(searchTrack.toTrack().copy(album = albumTitle))
                 _messageEvent.tryEmit("«${searchTrack.title}» добавлен в Мою музыку")
             }
+        }
+    }
+
+    fun toggleAlbumTrackLibrary(index: Int, albumTitle: String) {
+        val current = _albumState.value as? AlbumUiState.Success ?: return
+        val item = current.tracks.getOrNull(index) ?: return
+        val artist = item.artist.ifBlank { current.album.artistName }
+        val key = trackKey(artist, item.title)
+
+        // Если трек уже в библиотеке (даже если resolvedTrack == null) — удаляем сразу без поиска
+        if (item.resolvedTrack?.id in libraryIds.value || key in libraryTitleKeys.value) {
+            viewModelScope.launch {
+                val all = trackRepository.getAllTracks().first()
+                val existing = item.resolvedTrack?.let { r -> all.firstOrNull { it.id == r.id } }
+                    ?: all.firstOrNull { trackKey(it.artist, it.title) == key }
+                if (existing != null) {
+                    downloadManager?.cancelOrDeleteDownload(existing.id, existing.filePath)
+                    trackRepository.deleteTrack(existing)
+                    _messageEvent.tryEmit("«${item.title}» удалён из Моей музыки")
+                }
+            }
+            return
+        }
+
+        // Если трека ещё нет в библиотеке — догружаем и сохраняем с привязкой к альбому
+        resolveAndExecute(index) { found ->
+            toggleLibrary(found, albumTitle)
         }
     }
 

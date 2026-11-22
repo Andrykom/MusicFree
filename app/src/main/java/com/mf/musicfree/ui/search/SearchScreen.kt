@@ -264,6 +264,55 @@ fun SearchScreen(
                 }
 
                 is SearchUiState.Success -> {
+                    val topArtist = catalogResult.artists.firstOrNull()
+                    if (topArtist != null) {
+                        item(key = "top_artist_${topArtist.id}") {
+                            Surface(
+                                tonalElevation = 2.dp,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .clickable { onNavigate("artist_detail/${topArtist.id}") }
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    TrackCover(
+                                        coverUrl = topArtist.pictureUrl,
+                                        title = topArtist.name,
+                                        modifier = Modifier
+                                            .size(52.dp)
+                                            .clip(CircleShape)
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = topArtist.name,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "Исполнитель",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                        contentDescription = "Открыть исполнителя",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     itemsIndexed(results, key = { _, item -> item.id }) { index, track ->
                         val isCurrent = track.id == currentTrack?.id
                         val prog = downloadProgress[track.id]

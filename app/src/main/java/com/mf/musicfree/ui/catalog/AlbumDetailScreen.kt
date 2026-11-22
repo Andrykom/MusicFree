@@ -44,6 +44,7 @@ fun AlbumDetailScreen(
     val isResolvingAlbum by viewModel.isResolvingAlbum.collectAsState()
     val currentTrack by playerViewModel.currentTrack.collectAsState()
     val libraryIds by viewModel.libraryIds.collectAsState()
+    val libraryTitleKeys by viewModel.libraryTitleKeys.collectAsState()
     val downloadedIds by viewModel.downloadedIds.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -195,7 +196,7 @@ fun AlbumDetailScreen(
                                     Button(
                                         onClick = {
                                             viewModel.playWholeAlbum(shuffle = false) { queue, idx ->
-                                                playerViewModel.playSearchResults(queue, idx)
+                                                playerViewModel.playAlbumQueue(queue, idx)
                                             }
                                         },
                                         enabled = !isResolvingAlbum,
@@ -215,7 +216,7 @@ fun AlbumDetailScreen(
                                     OutlinedButton(
                                         onClick = {
                                             viewModel.playWholeAlbum(shuffle = true) { queue, idx ->
-                                                playerViewModel.playSearchResults(queue, idx)
+                                                playerViewModel.playAlbumQueue(queue, idx)
                                             }
                                         },
                                         enabled = !isResolvingAlbum,
@@ -247,8 +248,13 @@ fun AlbumDetailScreen(
                     } else {
                         itemsIndexed(tracks, key = { idx, item -> "alb_tr_${idx}_${item.title}" }) { index, item ->
                             val resolved = item.resolvedTrack
-                            val isCurrent = resolved != null && resolved.id == currentTrack?.id
-                            val isInLibrary = resolved != null && resolved.id in libraryIds
+                            val isCurrent = currentTrack != null &&
+                                    currentTrack!!.title.equals(item.title, ignoreCase = true) &&
+                                    ((resolved != null && resolved.id == currentTrack!!.id) ||
+                                            currentTrack!!.album.equals(album.title, ignoreCase = true))
+                            val trackArtist = item.artist.ifBlank { album.artistName }
+                            val isInLibrary = (resolved != null && resolved.id in libraryIds) ||
+                                    viewModel.trackKey(trackArtist, item.title) in libraryTitleKeys
                             val isDownloaded = resolved != null && resolved.id in downloadedIds
                             val progress = resolved?.let { downloadProgress[it.id] }
                             val isResolving = resolvingIndex == index
@@ -265,12 +271,12 @@ fun AlbumDetailScreen(
                                         playerViewModel.togglePlayPause()
                                     } else {
                                         viewModel.playAlbumTrack(index) { queue, idx ->
-                                            playerViewModel.playSearchResults(queue, idx)
+                                            playerViewModel.playAlbumQueue(queue, idx)
                                         }
                                     }
                                 },
                                 onToggleLibrary = {
-                                    viewModel.resolveAndExecute(index) { viewModel.toggleLibrary(it) }
+                                    viewModel.toggleAlbumTrackLibrary(index, album.title)
                                 },
                                 onDownload = {
                                     viewModel.resolveAndExecute(index) { viewModel.downloadTrack(it) }

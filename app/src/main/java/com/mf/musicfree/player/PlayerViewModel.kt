@@ -119,11 +119,16 @@ class PlayerViewModel(
     val playbackErrorEvent: SharedFlow<String> = _playbackErrorEvent.asSharedFlow()
 
     private var lyricsJob: Job? = null
+
+    private var albumResolveJob: Job? = null
     private var loadedLyricsTrackId: String? = null
     private var lastRetriedUrlTrackId: String? = null
     private var lastPersistedPosMs: Long = -1L
 
     private val _isRadioMode = MutableStateFlow(false)
+
+    private val _isTasteWaveActive = MutableStateFlow(false)
+    val isTasteWaveActive: StateFlow<Boolean> = _isTasteWaveActive
     val isRadioMode: StateFlow<Boolean> = _isRadioMode
 
     private val _isRadioBuffering = MutableStateFlow(false)
@@ -311,19 +316,31 @@ class PlayerViewModel(
         val sortedPlugins = manager.plugins.sortedBy { plugin ->
             when {
                 preferredPrefix == "zv" && plugin.name.equals("Zvuch", true) -> 0
-                preferredPrefix == "dm" && plugin.name.equals("DriveMusic", true) -> 0
                 preferredPrefix == "tmp3" && plugin.name.equals("TheMP3", true) -> 0
+                preferredPrefix == "dm" && plugin.name.equals("DriveMusic", true) -> 0
                 plugin.name.equals("Zvuch", true) -> 1
-                else -> 2
+                plugin.name.equals("TheMP3", true) -> 2
+                else -> 3
             }
         }
         for (plugin in sortedPlugins) {
             try {
                 val results = withTimeoutOrNull(7_000) { plugin.search(query) } ?: continue
-                val match = results.firstOrNull { candidate ->
-                    !candidate.audioUrl.isNullOrBlank() &&
-                            candidate.title.equals(track.title, ignoreCase = true)
-                } ?: results.firstOrNull { !it.audioUrl.isNullOrBlank() }
+                val valid = results.filter {
+                    !it.audioUrl.isNullOrBlank() &&
+                            !it.artist.equals("Популярные песни", ignoreCase = true)
+                }
+                if (valid.isEmpty()) continue
+
+                val normTitle = track.title.lowercase().replace('ё', 'е')
+                    .replace(Regex("""\([^)]*\)?"""), "").trim()
+
+                val match = valid.firstOrNull { candidate ->
+                    val candTitle = candidate.title.lowercase().replace('ё', 'е')
+                        .replace(Regex("""\([^)]*\)?"""), "").trim()
+                    candTitle == normTitle ||
+                            (normTitle.length >= 4 && candTitle.contains(normTitle))
+                }
                 if (match?.audioUrl != null) {
                     return match.audioUrl
                 }
@@ -418,6 +435,57 @@ class PlayerViewModel(
         }
     }
 
+    fun startTasteWave() {
+        if (_isTasteWaveActive.value && _isRadioMode.value) {
+            togglePlayPause()
+            return
+        }
+        stopRadio()
+        _isRadioBuffering.value = true
+        radioLoadJob = viewModelScope.launch {
+            val libraryTracks = trackRepository.getAllTracks().first()
+            if (libraryTracks.isEmpty()) {
+                _isRadioBuffering.value = false
+                _playbackErrorEvent.tryEmit("Добавьте пару треков в Мою музыку, чтобы Волна узнала ваш вкус")
+                return@launch
+            }
+
+            radioSeeds = radioRepository.getTasteSeeds(libraryTracks)
+            radioSeedIndex = 0
+            if (radioSeeds.isEmpty()) {
+                _isRadioBuffering.value = false
+                _playbackErrorEvent.tryEmit("Не удалось подобрать треки для Волны")
+                return@launch
+            }
+
+            // Ищем первый рабочий трек для старта
+            var firstTrack: Track? = null
+            while (radioSeedIndex < radioSeeds.size && firstTrack == null) {
+                val seed = radioSeeds[radioSeedIndex++]
+                firstTrack = try {
+                    radioRepository.findTrack(seed.artist.name, seed.title)
+                } catch (_: Exception) { null }
+            }
+
+            if (firstTrack == null) {
+                _isRadioBuffering.value = false
+                _playbackErrorEvent.tryEmit("Не удалось загрузить треки для Волны")
+                return@launch
+            }
+
+            // Запускаем первый трек (при _isRadioMode == false, чтобы playFromQueue не перезапустил обычное радио)
+            playFromQueue(listOf(firstTrack), 0)
+            radioQueuedIds.add(firstTrack.id)
+            _isTasteWaveActive.value = true
+            _isRadioMode.value = true
+            playerController.setSavedIsRadioMode(true)
+            _isRadioBuffering.value = false
+
+            // Догружаем буфер вперёд
+            runRadioLoader()
+        }
+    }
+
     fun toggleBlockCurrentArtist() {
         val raw = _currentTrack.value?.artist ?: return
         val artists = splitArtists(raw)
@@ -470,6 +538,7 @@ class PlayerViewModel(
     }
 
     private fun stopRadio() {
+        _isTasteWaveActive.value = false
         radioLoadJob?.cancel()
         radioLoadJob = null
         radioSeeds = emptyList()
@@ -480,6 +549,7 @@ class PlayerViewModel(
     }
 
     private fun startRadioForCurrent() {
+        _isTasteWaveActive.value = false
         val track = _currentTrack.value ?: return
         stopRadio()
         _isRadioMode.value = true
@@ -558,7 +628,11 @@ class PlayerViewModel(
             playerController.setSavedIsRadioMode(false)
             return false
         }
-        val newSeeds = radioRepository.getSeeds(sourceArtist)
+        val newSeeds = if (_isTasteWaveActive.value) {
+            radioRepository.getTasteSeeds(trackRepository.getAllTracks().first())
+        } else {
+            radioRepository.getSeeds(sourceArtist)
+        }
         radioSeeds = newSeeds
         radioSeedIndex = 0
         if (newSeeds.isEmpty()) {
@@ -683,6 +757,7 @@ class PlayerViewModel(
     // ─── Воспроизведение ───
 
     fun playFromQueue(tracks: List<Track>, index: Int) {
+        albumResolveJob?.cancel()
         if (tracks.isEmpty()) return
         val safeIdx = index.coerceIn(0, tracks.lastIndex)
         lastRetriedUrlTrackId = null
@@ -714,6 +789,45 @@ class PlayerViewModel(
 
         if (_isRadioMode.value) {
             startRadioForCurrent()
+        }
+    }
+
+    fun playAlbumQueue(tracks: List<Track>, startIndex: Int) {
+        playFromQueue(tracks, startIndex)
+
+        // Запускаем фоновую догрузку всех треков альбома без audioUrl
+        // Сначала догружаем следующие после текущего, потом те, что были до него
+        val pendingIds = buildList {
+            for (i in (startIndex + 1) until tracks.size) {
+                if (tracks[i].sourceUrl.isNullOrBlank() && !tracks[i].isDownloaded) add(tracks[i].id)
+            }
+            for (i in 0 until startIndex) {
+                if (tracks[i].sourceUrl.isNullOrBlank() && !tracks[i].isDownloaded) add(tracks[i].id)
+            }
+        }
+        if (pendingIds.isEmpty()) return
+
+        albumResolveJob = viewModelScope.launch {
+            for (trackId in pendingIds) {
+                if (!isActive) break
+                val currentIdx = _queue.value.indexOfFirst { it.id == trackId }
+                if (currentIdx == -1) continue
+                val track = _queue.value[currentIdx]
+                if (!track.sourceUrl.isNullOrBlank()) continue
+
+                val freshUrl = refreshStreamUrl(track)
+                if (!freshUrl.isNullOrBlank()) {
+                    val latestIdx = _queue.value.indexOfFirst { it.id == trackId }
+                    if (latestIdx != -1) {
+                        val updated = _queue.value[latestIdx].copy(sourceUrl = freshUrl)
+                        _queue.value = _queue.value.toMutableList().apply { set(latestIdx, updated) }
+                        if (_currentTrack.value?.id == trackId) {
+                            _currentTrack.value = updated
+                        }
+                        playerController.updateTrackInQueue(latestIdx, updated)
+                    }
+                }
+            }
         }
     }
 

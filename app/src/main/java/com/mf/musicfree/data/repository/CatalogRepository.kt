@@ -45,8 +45,9 @@ class CatalogRepository(
         get() = pluginManager.plugins.sortedBy { plugin ->
             when {
                 plugin.name.equals("Zvuch", ignoreCase = true) -> 0
-                plugin.name.equals("DriveMusic", ignoreCase = true) -> 1
-                else -> 2
+                plugin.name.equals("TheMP3", ignoreCase = true) -> 1
+                plugin.name.equals("DriveMusic", ignoreCase = true) -> 2
+                else -> 3
             }
         }
 
@@ -75,6 +76,25 @@ class CatalogRepository(
         return album.id
     }
 
+    fun registerAlbumByName(artistName: String, albumTitle: String): String {
+        val cleanTitle = albumTitle.trim()
+        val cleanArtist = artistName.trim()
+        val existing = albumCache.values.firstOrNull {
+            isTitleSimilar(it.title, cleanTitle) &&
+                    (cleanArtist.isBlank() || it.artistName.isBlank() || isNameMatch(it.artistName, cleanArtist))
+        }
+        if (existing != null) return existing.id
+
+        val id = "name_alb_${cleanArtist.lowercase().hashCode().toUInt()}_${cleanTitle.lowercase().hashCode().toUInt()}"
+        val info = AlbumInfo(
+            id = id,
+            title = cleanTitle,
+            artistName = cleanArtist
+        )
+        albumCache[id] = info
+        return id
+    }
+
     /**
      * Поиск исполнителей и альбомов для верхнего блока SearchScreen.
      * Выводит артиста, если запрос совпадает с именем исполнителя, и релевантные альбомы.
@@ -92,10 +112,16 @@ class CatalogRepository(
         val itArtists = itArtistsDeferred.await()
         val dzAlbums = dzAlbumsDeferred.await()
         val itAlbums = itAlbumsDeferred.await()
+        val normQuery = normalize(trimmed)
+
 
         val mergedArtists = mergeArtists(dzArtists, itArtists)
             .filter { isArtistRelevantToQuery(it.name, trimmed) }
-            .take(3)
+            .sortedWith(
+                compareByDescending<ArtistInfo> { normalize(it.name) == normQuery }
+                    .thenByDescending { it.fansCount ?: 0 }
+            )
+            .take(1)
             .onEach { artistCache[it.id] = it }
 
         val mergedAlbums = mergeAlbums(dzAlbums, itAlbums)
@@ -347,13 +373,17 @@ class CatalogRepository(
 
         // Сопоставляем каждый официальный трек с треком из пула Zvuch по названию
         val normAlbumTitle = normalize(finalAlbum.title)
+        val usedTrackIds = mutableSetOf<String>()
         val matchedItems = officialTracks.map { item ->
             val best = findBestZvuchMatch(
                 expectedTitle = item.title,
                 expectedArtist = item.artist.ifBlank { finalAlbum.artistName },
                 normAlbumTitle = normAlbumTitle,
-                pool = zvuchPool
+                pool = zvuchPool.filter { it.id !in usedTrackIds }
             )
+            if (best != null) {
+                usedTrackIds.add(best.id)
+            }
             item.copy(
                 coverUrl = finalAlbum.coverUrl ?: item.coverUrl ?: best?.coverUrl,
                 resolvedTrack = best?.copy(
@@ -379,13 +409,30 @@ class CatalogRepository(
         for (plugin in orderedPlugins) {
             try {
                 val results = withTimeoutOrNull(6_000) { plugin.search(query) } ?: continue
+                val validResults = results.filter {
+                    !it.audioUrl.isNullOrBlank() &&
+                            !it.artist.equals("Популярные песни", ignoreCase = true)
+                }
+                if (validResults.isEmpty()) continue
+
                 val best = findBestZvuchMatch(
                     expectedTitle = title,
                     expectedArtist = artist,
                     normAlbumTitle = "",
-                    pool = results
-                )
-                if (best != null && !best.audioUrl.isNullOrBlank()) {
+                    pool = validResults
+                ) ?: if (validResults.size == 1) {
+                    val only = validResults.first()
+                    // Берём единственный результат, только если совпадает хотя бы артист или часть названия
+                    val normExpTitle = normalize(title)
+                    val normCandTitle = normalize(only.title)
+                    if (isArtistContained(only.artist, artist) ||
+                        (normExpTitle.length >= 3 && normCandTitle.contains(normExpTitle))
+                    ) only else null
+                } else {
+                    null
+                }
+
+                if (best != null) {
                     return best.copy(
                         title = title,
                         artist = artist.ifBlank { best.artist },
@@ -428,7 +475,9 @@ class CatalogRepository(
         val expTitle = normalize(expectedTitle)
         if (expTitle.isBlank()) return null
         val expArtist = normalize(expectedArtist)
-        val expHasRemix = remixMarkers.any { expTitle.contains(it) }
+        val expVersionTag = Regex("""\(([^)]+)\)""").find(expectedTitle)?.groupValues?.get(1)
+            ?.let { normalize(it) }?.takeIf { it.length >= 3 }
+        val expHasRemix = remixMarkers.any { expectedTitle.lowercase().contains(it) }
 
         var bestTrack: SearchTrack? = null
         var bestScore = 0
@@ -442,6 +491,16 @@ class CatalogRepository(
 
             val candHasRemix = remixMarkers.any { candFull.contains(it) }
             if (candHasRemix && !expHasRemix) continue
+
+            // Если у искомого трека указана конкретная версия в скобках (Remix, Aggressive Version и т.д.),
+            // кандидат обязан содержать слова из этой версии
+            if (expVersionTag != null) {
+                val candRawLower = candidate.title.lowercase().replace('ё', 'е')
+                val versionWords = expVersionTag.split(" ").filter { it.length >= 3 }
+                if (versionWords.isNotEmpty() && versionWords.none { candRawLower.contains(it) }) {
+                    continue
+                }
+            }
 
             var score = 0
             when {
@@ -491,6 +550,7 @@ class CatalogRepository(
             baseTitle to inside
         }
     }
+
 
     private fun mergeArtists(primary: List<ArtistInfo>, secondary: List<ArtistInfo>): List<ArtistInfo> {
         val result = mutableListOf<ArtistInfo>()
@@ -574,8 +634,8 @@ class CatalogRepository(
     private fun normalize(s: String): String =
         s.lowercase()
             .replace('ё', 'е')
-            .replace(Regex("""\([^)]*\)"""), " ")
-            .replace(Regex("""\[[^\]]*]"""), " ")
+            .replace(Regex("""\([^)]*\)?"""), " ")
+            .replace(Regex("""\[[^\]]*]?"""), " ")
             .replace(Regex("""[^a-zа-я0-9\s]"""), " ")
             .replace(Regex("""\s+"""), " ")
             .trim()

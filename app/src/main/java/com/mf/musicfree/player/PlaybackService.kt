@@ -32,6 +32,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
+import android.media.AudioManager
+import androidx.core.content.ContextCompat
+import androidx.media3.common.Timeline
 
 @UnstableApi
 class PlaybackService : MediaSessionService() {
@@ -54,14 +60,32 @@ class PlaybackService : MediaSessionService() {
         private const val IDLE_TIMEOUT_MS = 15 * 60_000L // 15 минут реальной паузы -> закрываем сервис
     }
 
+    private val becomingNoisyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
+                playerController.pause()
+            }
+        }
+    }
+
     private var attachedPlayer: Player? = null
     private val servicePlayerListener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
             attachedPlayer?.let { updateNotification(it) }
         }
 
+        override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+            val p = attachedPlayer ?: return
+            if (p.duration > 0L) {
+                updateNotification(p)
+            }
+        }
+
         override fun onPlaybackStateChanged(playbackState: Int) {
             val p = attachedPlayer ?: return
+            if (playbackState == Player.STATE_READY) {
+                updateNotification(p)
+            }
             if (playbackState == Player.STATE_BUFFERING || p.isPlaying || p.playWhenReady) {
                 idleStopJob?.cancel()
             } else {
@@ -96,6 +120,7 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         createNotificationChannel()
+
         startForeground(NOTIFICATION_ID, buildEmptyNotification())
 
         val player = playerController.getExoPlayer()
@@ -302,6 +327,9 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        try {
+            unregisterReceiver(becomingNoisyReceiver)
+        } catch (_: Exception) {}
         idleStopJob?.cancel()
         currentCoverJob?.cancel()
         serviceScope.cancel()
@@ -314,4 +342,6 @@ class PlaybackService : MediaSessionService() {
         }
         super.onDestroy()
     }
+
+
 }

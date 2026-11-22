@@ -11,6 +11,9 @@ import com.mf.musicfree.plugin.SearchTrack
 import com.mf.musicfree.plugin.SourcePlugin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 class RadioRepository(
     private val deezerRadioApi: DeezerRadioApi,
@@ -64,6 +67,42 @@ class RadioRepository(
         }
     }
 
+    /** Подборка рекомендаций по общему вкусу из библиотеки пользователя */
+    suspend fun getTasteSeeds(libraryTracks: List<Track>): List<DeezerRadioTrack> = coroutineScope {
+        if (libraryTracks.isEmpty()) return@coroutineScope emptyList()
+
+        val blocked = blockedArtistsRepository.blockedArtists.first()
+        val artistCounts = libraryTracks
+            .map { it.artist.split(",", ";", "&", "feat.", "ft.", ignoreCase = true).first().trim() }
+            .filter { it.isNotBlank() && it.lowercase() !in blocked }
+            .groupingBy { it }
+            .eachCount()
+
+        if (artistCounts.isEmpty()) return@coroutineScope emptyList()
+
+        val topArtists = artistCounts.entries
+            .sortedByDescending { it.value }
+            .take(3)
+            .map { it.key }
+
+        val randomArtists = artistCounts.keys
+            .filter { it !in topArtists }
+            .shuffled()
+            .take(2)
+
+        val seedArtists = (topArtists + randomArtists).distinct()
+        val libraryKeys = libraryTracks.map { normalize("${it.artist} ${it.title}") }.toSet()
+
+        val allSeeds = seedArtists.map { artist ->
+            async { getSeeds(artist) }
+        }.awaitAll().flatten()
+
+        allSeeds
+            .distinctBy { normalize("${it.artist.name} ${it.title}") }
+            .filter { normalize("${it.artist.name} ${it.title}") !in libraryKeys }
+            .shuffled()
+    }
+
     /** Найти конкретный трек через плагины (приоритет Zvuch) с проверкой совпадения */
     suspend fun findTrack(artist: String, title: String): Track? {
         if (blockedArtistsRepository.isBlocked(artist)) return null
@@ -73,7 +112,7 @@ class RadioRepository(
         for (plugin in orderedPlugins) {
             try {
                 val results = withTimeoutOrNull(8_000) { plugin.search(query) } ?: continue
-                val validResults = results.filter { !it.audioUrl.isNullOrBlank() }
+                val validResults = results.filter { !it.audioUrl.isNullOrBlank() && !it.artist.equals("Популярные песни", ignoreCase = true)}
                 if (validResults.isEmpty()) continue
 
                 // Ищем результат, который реально совпадает по названию с искомым треком
