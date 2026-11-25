@@ -35,6 +35,9 @@ import com.mf.musicfree.plugin.PluginManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
+import androidx.compose.material.icons.filled.DownloadForOffline
+import com.mf.musicfree.data.download.DownloadManager
+import com.mf.musicfree.data.repository.TrackRepository
 
 private data class CryptoWallet(
     val coin: String,
@@ -55,11 +58,19 @@ fun SettingsScreen(
     blockedRepo: BlockedArtistsRepository = koinInject(),
     settingsRepo: SettingsRepository = koinInject(),
     pluginManager: PluginManager = koinInject(),
-    musicImportService: MusicImportService = koinInject()
+    musicImportService: MusicImportService = koinInject(),
+    trackRepository: TrackRepository = koinInject(),
+    downloadManager: DownloadManager = koinInject()
 ) {
     val blocked by blockedRepo.blockedArtists.collectAsState(initial = emptySet())
     val defaultPlugin by settingsRepo.defaultPluginName.collectAsState(initial = null)
     val crossfadeSeconds by settingsRepo.crossfadeSeconds.collectAsState(initial = 0)
+    val libraryTracks by trackRepository.getAllTracks().collectAsState(initial = emptyList())
+    val downloadProgress by downloadManager.downloadProgress.collectAsState()
+    val pendingDownloadTracks = remember(libraryTracks) {
+        libraryTracks.filter { !it.isDownloaded && !it.sourceUrl.isNullOrBlank() }
+    }
+    val activeDownloadsCount = downloadProgress.size
     val scope = rememberCoroutineScope()
 
     var showImportDialog by remember { mutableStateOf(false) }
@@ -135,6 +146,60 @@ fun SettingsScreen(
                         showImportDialog = true
                     }) {
                         Text("Импорт")
+                    }
+                }
+            )
+        }
+        item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
+
+        // Скачать все треки из Моей музыки
+        item {
+            val context = LocalContext.current
+            ListItem(
+                headlineContent = { Text("Скачать всю библиотеку") },
+                supportingContent = {
+                    val text = when {
+                        activeDownloadsCount > 0 ->
+                            "Загружается: $activeDownloadsCount • осталось: ${pendingDownloadTracks.size}"
+                        pendingDownloadTracks.isEmpty() ->
+                            "Все доступные треки уже скачаны"
+                        else ->
+                            "Не скачано треков: ${pendingDownloadTracks.size}"
+                    }
+                    Text(text)
+                },
+                leadingContent = {
+                    Icon(
+                        imageVector = Icons.Default.DownloadForOffline,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                },
+                trailingContent = {
+                    FilledTonalButton(
+                        enabled = pendingDownloadTracks.isNotEmpty() && activeDownloadsCount == 0,
+                        onClick = {
+                            val toDownload = pendingDownloadTracks.toList()
+                            scope.launch {
+                                toDownload.forEach { track ->
+                                    downloadManager.downloadTrack(track)
+                                }
+                            }
+                            Toast.makeText(
+                                context,
+                                "Поставлено в очередь: ${toDownload.size}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    ) {
+                        if (activeDownloadsCount > 0) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text("Скачать всё")
+                        }
                     }
                 }
             )

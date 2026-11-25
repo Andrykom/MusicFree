@@ -63,6 +63,9 @@ class PlayerViewModel(
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying
 
+    private val _isBuffering = MutableStateFlow(false)
+    val isBuffering: StateFlow<Boolean> = _isBuffering
+
     private val _progress = MutableStateFlow(0f)
     val progress: StateFlow<Float> = _progress
 
@@ -78,6 +81,8 @@ class PlayerViewModel(
     private val _isShuffled = MutableStateFlow(false)
     val isShuffled: StateFlow<Boolean> = _isShuffled
     private var originalQueue: List<Track>? = null
+
+    fun getAudioSpectrum(): AudioSpectrum = playerController.spectrumMonitor.snapshot()
 
     val downloadProgress: StateFlow<Map<String, Int>> = downloadManager?.downloadProgress
         ?: MutableStateFlow(emptyMap())
@@ -147,6 +152,7 @@ class PlayerViewModel(
     private var radioLoadJob: Job? = null
     private val radioQueuedIds = mutableSetOf<String>()
 
+
     init {
         settingsRepository?.let { repo ->
             viewModelScope.launch {
@@ -190,6 +196,10 @@ class PlayerViewModel(
                 _currentPosition.value = pos
                 persistPositionAsync(pos)
             }
+        }
+
+        playerController.setOnBufferingChangeListener { buffering ->
+            _isBuffering.value = buffering
         }
 
         playerController.setOnPlayerErrorListener { _ ->
@@ -354,7 +364,12 @@ class PlayerViewModel(
         val q = _queue.value
         viewModelScope.launch {
             try {
-                repo.savePlaybackSnapshot(q, index, positionMs)
+                repo.savePlaybackSnapshot(
+                    queue = q,
+                    currentIndex = index,
+                    positionMs = positionMs,
+                    isTasteWave = _isTasteWaveActive.value
+                )
                 lastPersistedPosMs = positionMs
             } catch (_: Exception) {}
         }
@@ -372,6 +387,7 @@ class PlayerViewModel(
     }
 
     private fun syncFromController() {
+        _isBuffering.value = playerController.isBuffering()
         _repeatMode.value = playerController.getSavedRepeatMode()
         _isShuffled.value = playerController.getSavedIsShuffled()
         originalQueue = playerController.getOriginalQueue()
@@ -403,6 +419,13 @@ class PlayerViewModel(
         val repo = settingsRepository ?: return
         viewModelScope.launch {
             val snapshot = repo.loadPlaybackSnapshot() ?: return@launch
+            if (snapshot.isTasteWave) {
+                _isTasteWaveActive.value = true
+                _isRadioMode.value = true
+                playerController.setSavedIsRadioMode(true)
+                radioQueuedIds.clear()
+                radioQueuedIds.addAll(snapshot.queue.map { it.id })
+            }
             if (_queue.value.isNotEmpty()) return@launch
             val track = snapshot.queue.getOrNull(snapshot.currentIndex) ?: return@launch
             _queue.value = snapshot.queue
@@ -438,6 +461,11 @@ class PlayerViewModel(
     fun startTasteWave() {
         if (_isTasteWaveActive.value && _isRadioMode.value) {
             togglePlayPause()
+            if (radioSeeds.isEmpty() && radioLoadJob?.isActive != true) {
+                radioLoadJob = viewModelScope.launch {
+                    runRadioLoader()
+                }
+            }
             return
         }
         stopRadio()
@@ -756,8 +784,12 @@ class PlayerViewModel(
 
     // ─── Воспроизведение ───
 
-    fun playFromQueue(tracks: List<Track>, index: Int) {
+    fun playFromQueue(tracks: List<Track>, index: Int, keepTasteWave: Boolean = false) {
         albumResolveJob?.cancel()
+        if (!keepTasteWave && _isTasteWaveActive.value) {
+            // Тихо останавливаем Мою волну при запуске новой очереди (библиотека / альбом / артист)
+            stopRadio()
+        }
         if (tracks.isEmpty()) return
         val safeIdx = index.coerceIn(0, tracks.lastIndex)
         lastRetriedUrlTrackId = null

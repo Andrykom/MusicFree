@@ -1,6 +1,5 @@
 package com.mf.musicfree.ui.wave
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -8,6 +7,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -15,11 +15,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mf.musicfree.player.PlayerViewModel
+
 
 @Composable
 fun WaveScreen(
@@ -27,24 +27,28 @@ fun WaveScreen(
 ) {
     val isTasteWaveActive by playerViewModel.isTasteWaveActive.collectAsState()
     val isPlaying by playerViewModel.isPlaying.collectAsState()
-    val isBuffering by playerViewModel.isRadioBuffering.collectAsState()
-    val currentTrack by playerViewModel.currentTrack.collectAsState()
 
+    val currentTrack by playerViewModel.currentTrack.collectAsState()
+    val queue by playerViewModel.queue.collectAsState()
+
+    val isRadioBuffering by playerViewModel.isRadioBuffering.collectAsState()
     val isWavePlaying = isTasteWaveActive && isPlaying
+    val currentIndex = queue.indexOfFirst { it.id == currentTrack?.id }
+    val canGoPrevious = currentIndex > 0
+
+    val isPlayerBuffering by playerViewModel.isBuffering.collectAsState()
+    val isBuffering = isRadioBuffering || (isTasteWaveActive && isPlayerBuffering)
 
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
-                        MaterialTheme.colorScheme.background
-                    )
-                )
-            ),
+        modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
+        WavePlasmaBackground(
+            isWavePlaying = isWavePlaying,
+            isWaveActive = isTasteWaveActive,
+            spectrumProvider = { playerViewModel.getAudioSpectrum() }
+        )
+
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(20.dp),
@@ -83,6 +87,19 @@ fun WaveScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(20.dp)
             ) {
+                if (isTasteWaveActive) {
+                    FilledTonalIconButton(
+                        onClick = { playerViewModel.previous() },
+                        enabled = canGoPrevious && !isBuffering,
+                        modifier = Modifier.size(52.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SkipPrevious,
+                            contentDescription = "Предыдущий трек"
+                        )
+                    }
+                }
+
                 FilledIconButton(
                     onClick = { playerViewModel.startTasteWave() },
                     enabled = !isBuffering,

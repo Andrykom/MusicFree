@@ -68,6 +68,8 @@ fun FullPlayerScreen(
     var showAddToPlaylist by remember { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
 
+    val isPlayerBuffering by viewModel.isBuffering.collectAsState() // в WaveScreen: playerViewModel.isBuffering
+
     val track = currentTrack
     if (track == null) {
         LaunchedEffect(Unit) { onBack() }
@@ -244,11 +246,19 @@ fun FullPlayerScreen(
                             onClick = { viewModel.togglePlayPause() },
                             modifier = Modifier.size(72.dp)
                         ) {
-                            Icon(
-                                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                if (isPlaying) "Пауза" else "Играть",
-                                modifier = Modifier.size(36.dp)
-                            )
+                            if (isPlayerBuffering) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(30.dp),
+                                    strokeWidth = 3.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = if (isPlaying) "Пауза" else "Играть",
+                                    modifier = Modifier.size(36.dp)
+                                )
+                            }
                         }
                         IconButton(
                             onClick = { viewModel.next() },

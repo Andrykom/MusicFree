@@ -143,7 +143,7 @@ class LyricsRepository(
                     if (lrcLibRes != null) return@coroutineScope lrcLibRes
 
                     // Фолбэк на Genius с коротким таймаутом
-                    val geniusRes = withTimeoutOrNull(4_500) {
+                    val geniusRes = withTimeoutOrNull(8_000) {
                         try {
                             val text = geniusApi.getLyrics(a, t)
                             if (!text.isNullOrBlank()) createPlainTextLyrics(text) else null

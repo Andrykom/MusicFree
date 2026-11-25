@@ -1,123 +1,164 @@
 package com.mf.musicfree.data.api
 
 import android.util.Log
+import com.mf.musicfree.util.isNetworkError
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.statement.bodyAsText
-import com.mf.musicfree.util.isNetworkError
 import io.ktor.http.HttpHeaders
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
+import org.jsoup.safety.Safelist
 
 class GeniusApi(private val client: HttpClient) {
+    private val json = Json { ignoreUnknownKeys = true }
+
+    private val userAgent =
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
+
     suspend fun getLyrics(artist: String, title: String): String? {
         return try {
-            // Ищем трек через публичный API поиска Genius
-            val response = client.get("https://genius.com/api/search/multi") {
-                parameter("q", "$artist $title")
-                parameter("per_page", 5)
-                header(HttpHeaders.UserAgent, "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36")
-                header(HttpHeaders.Accept, "application/json, text/plain, */*")
-                header(HttpHeaders.AcceptLanguage, "ru-RU,ru;q=0.9,en;q=0.8")
-                header(HttpHeaders.Referrer, "https://genius.com/")
-            }.bodyAsText()
+            val cleanArtist = artist.split(",", ";", "&", "feat.", "ft.", ignoreCase = true).first().trim()
+            val cleanTitle = title.replace(Regex("""\([^)]*\)"""), "").trim()
 
-            // Cloudflare отдаёт HTML вместо JSON при блокировке
-            if (response.trimStart().startsWith("<!DOCTYPE") || response.contains("cf-challenge")) {
-                Log.w("GeniusApi", "Search blocked by Cloudflare for $artist - $title")
-                return null
-            }
+            // Ищем сначала по /api/search/song (чище и быстрее, чем multi)
+            val lyricsUrl = searchSongUrl("$cleanArtist$cleanTitle", cleanArtist, cleanTitle)
+                ?: searchSongUrl(cleanTitle, cleanArtist, cleanTitle)
+                ?: run {
+                    Log.d("GeniusApi", "No matching song URL for $artist -$title")
+                    return null
+                }
 
-            // Парсим URL страницы с текстом
-            val urlRegex = """"url":"(https://genius\.com/[^"]+lyrics)"""".toRegex()
-            val match = urlRegex.find(response)
-            val path = match?.groupValues?.get(1) ?: run {
-                Log.d("GeniusApi", "No lyrics URL in search for $artist - $title")
-                return null
-            }
-            Log.d("GeniusApi", "Search hit: $path")
+            Log.d("GeniusApi", "Fetching lyrics page: $lyricsUrl")
 
-            // Парсим HTML — нужен браузерный UA, иначе Cloudflare
-            val html = client.get(path) {
-                header(HttpHeaders.UserAgent, "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36")
+            val html = client.get(lyricsUrl) {
+                header(HttpHeaders.UserAgent, userAgent)
                 header(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                header(HttpHeaders.AcceptLanguage, "ru-RU,ru;q=0.9,en;q=0.8")
+                header(HttpHeaders.AcceptLanguage, "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
                 header(HttpHeaders.Referrer, "https://genius.com/")
             }.bodyAsText()
 
             if (html.contains("cf-challenge") || html.contains("Attention Required")) {
-                Log.w("GeniusApi", "Lyrics page blocked by Cloudflare: $path")
+                Log.w("GeniusApi", "Lyrics page blocked by Cloudflare: $lyricsUrl")
                 return null
             }
 
             val document = Jsoup.parse(html)
-
-            // 1) Стандартный путь — div[data-lyrics-container] (работает и на мобильной вёрстке)
-            var lyricsHtml = document.select("div[data-lyrics-container=true]")
-                .joinToString("\n") { it.html() }
-
-            // 2) Фолбэк — если контейнер пустой (React-SSR без него), пробуем вытащить из JSON
-            if (lyricsHtml.isBlank()) {
-                val jsonBlob = Regex("""window\.__PRELOADED_STATE__\s*=\s*JSON\.parse\('(.+?)'\)""").find(html)?.groupValues?.get(1)
-                if (jsonBlob != null) {
-                    // Внутри JSON есть dom с текстом — грубо вырезаем все "children":["text"] куски
-                    // Альтернативно ищем все "plainText" — но проще взять html из dom
-                    Log.d("GeniusApi", "Fallback: trying JSON parse for $path")
-                }
-            }
-
-            if (lyricsHtml.isBlank()) {
-                Log.d("GeniusApi", "No lyrics container for $path (len=${html.length})")
+            val containers = document.select("div[data-lyrics-container=true]")
+            if (containers.isEmpty()) {
+                Log.d("GeniusApi", "No lyrics container for $lyricsUrl (len=${html.length})")
                 return null
             }
 
+            // Удаляем встроенные заголовки ("Contributors", "Translations", "XXX Lyrics", кнопки)
+            containers.select("[data-exclude-from-selection=true], button, script, style").remove()
+
+            var lyricsHtml = containers.joinToString("\n") { it.html() }
             lyricsHtml = lyricsHtml.replace(Regex("(?i)<br\\s*/?>"), "\n")
 
-            // Очищаем от HTML тегов
             val rawText = Jsoup.clean(
                 lyricsHtml,
                 "",
-                org.jsoup.safety.Safelist.none(),
-                org.jsoup.nodes.Document.OutputSettings().prettyPrint(false)
+                Safelist.none(),
+                Document.OutputSettings().prettyPrint(false)
             ).trim()
 
             val plainText = cleanPlainText(rawText)
             if (plainText.isNotBlank()) plainText else null
         } catch (e: Exception) {
             if (e.isNetworkError()) throw e
-            Log.w("GeniusApi", "getLyrics failed for $artist - $title: ${e.message}")
+            Log.w("GeniusApi", "getLyrics failed for $artist - $title:${e.message}")
             null
         }
     }
 
-    /**
-     * Чистит статичный текст Genius: убирает [Куплет], [Припев], заголовок "XXX Lyrics"
-     * и лишний мусор. Синхронизированные lrc сюда не попадают.
-     */
+    private suspend fun searchSongUrl(query: String, expectedArtist: String, expectedTitle: String): String? {
+        val response = client.get("https://genius.com/api/search/song") {
+            parameter("q", query)
+            parameter("per_page", 5)
+            header(HttpHeaders.UserAgent, userAgent)
+            header(HttpHeaders.Accept, "application/json, text/plain, */*")
+            header(HttpHeaders.AcceptLanguage, "ru-RU,ru;q=0.9,en;q=0.8")
+            header(HttpHeaders.Referrer, "https://genius.com/")
+        }.bodyAsText()
+
+        if (response.trimStart().startsWith("<!DOCTYPE") || response.contains("cf-challenge")) {
+            Log.w("GeniusApi", "Search blocked by Cloudflare for '$query'")
+            return null
+        }
+
+        val root = try {
+            json.parseToJsonElement(response).jsonObject
+        } catch (_: Exception) {
+            return null
+        }
+
+        val sections = root["response"]?.jsonObject?.get("sections")?.jsonArray ?: return null
+        val expArtistNorm = normalize(expectedArtist)
+        val expTitleNorm = normalize(expectedTitle)
+
+        var fallbackUrl: String? = null
+
+        for (section in sections) {
+            val hits = section.jsonObject["hits"]?.jsonArray ?: continue
+            for (hit in hits) {
+                val res = hit.jsonObject["result"]?.jsonObject ?: continue
+                val url = res["url"]?.jsonPrimitive?.content ?: continue
+                if (!url.startsWith("https://genius.com/")) continue
+
+                val hitTitle = normalize(res["title"]?.jsonPrimitive?.content ?: "")
+                val hitArtist = normalize(
+                    res["primary_artist"]?.jsonObject?.get("name")?.jsonPrimitive?.content
+                        ?: res["artist_names"]?.jsonPrimitive?.content
+                        ?: ""
+                )
+
+                val artistMatch = expArtistNorm.isNotBlank() &&
+                        (hitArtist.contains(expArtistNorm) || expArtistNorm.contains(hitArtist))
+                val titleMatch = expTitleNorm.isNotBlank() &&
+                        (hitTitle == expTitleNorm || hitTitle.contains(expTitleNorm) || expTitleNorm.contains(hitTitle))
+
+                if (artistMatch && titleMatch) return url
+                if (fallbackUrl == null && artistMatch) fallbackUrl = url
+            }
+        }
+        return fallbackUrl
+    }
+
+    private fun normalize(s: String): String =
+        s.lowercase()
+            .replace('ё', 'е')
+            .replace(Regex("""\([^)]*\)"""), "")
+            .replace(Regex("""[^a-zа-я0-9\s]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+
     private fun cleanPlainText(text: String): String {
-        var t = text
-        // 1) Всё в квадратных скобках — секции [Интро], [Припев] и т.п.
-        t = t.replace(Regex("""\[[^\]]*]"""), " ")
-        // 2) Разбиваем на строки, тримим, убираем пустые
+        var t = text.replace(Regex("""\[[^\]]*]"""), " ")
         val lines = t.lines()
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .toMutableList()
 
-        // 3) Первая строка вида "Название (xxx) Lyrics" — выкидываем
-        if (lines.isNotEmpty() && lines.first().contains("Lyrics", ignoreCase = true)) {
+        // Убираем случайные шапки вида "12 Contributors ... Lyrics"
+        while (lines.isNotEmpty() && (
+                    lines.first().contains("Contributors", ignoreCase = true) ||
+                            lines.first().contains("Translations", ignoreCase = true) ||
+                            lines.first().endsWith("Lyrics", ignoreCase = true)
+                    )
+        ) {
             lines.removeAt(0)
         }
 
-        // 4) Склеиваем, схлопываем множественные пробелы/пустые строки
-        t = lines.joinToString("\n")
+        return lines.joinToString("\n")
             .replace(Regex("""[ \t]{2,}"""), " ")
             .replace(Regex("""\n{3,}"""), "\n\n")
             .trim()
-
-        return t
     }
 }

@@ -8,6 +8,8 @@ import com.mf.musicfree.data.api.DeezerRadioApi
 import com.mf.musicfree.data.api.GeniusApi
 import com.mf.musicfree.data.api.ITunesApi
 import com.mf.musicfree.data.api.KugouApi
+import com.mf.musicfree.data.api.LastFmApi
+import com.mf.musicfree.data.api.ListenBrainzApi
 import com.mf.musicfree.data.api.LrcLibApi
 import com.mf.musicfree.data.api.NeteaseApi
 import com.mf.musicfree.data.db.AppDatabase
@@ -15,6 +17,7 @@ import com.mf.musicfree.data.importer.MusicImportService
 import com.mf.musicfree.data.importer.PlaylistWebExtractor
 import com.mf.musicfree.data.preferences.BlockedArtistsRepository
 import com.mf.musicfree.data.preferences.SettingsRepository
+import com.mf.musicfree.data.preferences.TasteProfileRepository
 import com.mf.musicfree.data.repository.DeviceTracksRepository
 import com.mf.musicfree.data.repository.LyricsRepository
 import com.mf.musicfree.data.repository.PlaylistRepository
@@ -108,7 +111,14 @@ val appModule = module {
         }
     }
 
-    single { RadioRepository(get(), get(), get()) } // DeezerRadioApi, PluginManager, BlockedArtists
+
+    single { TasteProfileRepository(androidContext()) }
+    single { LastFmApi(get()) } // позже можно передать apiKey = "ТВОЙ_КЛЮЧ"
+    single { ListenBrainzApi(get()) }
+    single { DeezerRadioApi(get()) }
+
+    single { RadioRepository(get(), get(), get(), get(), get(), get()) }
+
     single { DeviceTracksRepository(androidContext()) }
     single { PlaylistWebExtractor() }
     single { MusicImportService(get(), get(), get()) }

@@ -27,6 +27,8 @@ fun MiniPlayer(
     val isPlaying by viewModel.isPlaying.collectAsState()
     val progress by viewModel.progress.collectAsState()
 
+    val isPlayerBuffering by viewModel.isBuffering.collectAsState() // в WaveScreen: playerViewModel.isBuffering
+
     if (currentTrack == null) {
         Spacer(modifier = Modifier.height(0.dp))
         return
@@ -94,10 +96,17 @@ fun MiniPlayer(
                         Icon(Icons.Default.SkipPrevious, "Previous")
                     }
                     IconButton(onClick = { viewModel.togglePlayPause() }) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (isPlaying) "Pause" else "Play"
-                        )
+                        if (isPlayerBuffering) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(22.dp),
+                                strokeWidth = 2.5.dp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = if (isPlaying) "Pause" else "Play"
+                            )
+                        }
                     }
                     IconButton(onClick = { viewModel.next() }) {
                         Icon(Icons.Default.SkipNext, "Next")

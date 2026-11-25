@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 private val Context.settingsDataStore by preferencesDataStore(name = "user_settings")
 
@@ -61,7 +63,8 @@ data class SavedTrackDto(
 data class SavedPlaybackSnapshot(
     val queue: List<Track>,
     val currentIndex: Int,
-    val positionMs: Long
+    val positionMs: Long,
+    val isTasteWave: Boolean = false
 )
 
 class SettingsRepository(private val context: Context) {
@@ -75,9 +78,17 @@ class SettingsRepository(private val context: Context) {
         private val KEY_SAVED_QUEUE = stringPreferencesKey("saved_playback_queue")
         private val KEY_SAVED_INDEX = intPreferencesKey("saved_playback_index")
         private val KEY_SAVED_POSITION = longPreferencesKey("saved_playback_position_ms")
+
+        private val KEY_SAVED_IS_TASTE_WAVE = booleanPreferencesKey("saved_is_taste_wave")
     }
 
-    val defaultPluginName: Flow<String?> = dataStore.data.map { it[KEY_DEFAULT_PLUGIN] }
+    val defaultPluginName: Flow<String?> = dataStore.data
+        .map { it[KEY_DEFAULT_PLUGIN] }
+        .distinctUntilChanged()
+
+    val crossfadeSeconds: Flow<Int> = dataStore.data
+        .map { it[KEY_CROSSFADE_SECONDS] ?: 0 }
+        .distinctUntilChanged()
 
     suspend fun setDefaultPluginName(name: String) {
         dataStore.edit { prefs ->
@@ -85,7 +96,6 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
-    val crossfadeSeconds: Flow<Int> = dataStore.data.map { it[KEY_CROSSFADE_SECONDS] ?: 0 }
 
     suspend fun setCrossfadeSeconds(seconds: Int) {
         dataStore.edit { prefs ->
@@ -93,12 +103,16 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
-    suspend fun savePlaybackSnapshot(queue: List<Track>, currentIndex: Int, positionMs: Long) {
+    suspend fun savePlaybackSnapshot(
+        queue: List<Track>,
+        currentIndex: Int,
+        positionMs: Long,
+        isTasteWave: Boolean = false
+    ) {
         if (queue.isEmpty() || currentIndex !in queue.indices) {
             clearPlaybackSnapshot()
             return
         }
-        // Ограничиваем размер сохраняемого снимка 80 треками вокруг текущего, чтобы DataStore не раздувался
         val start = (currentIndex - 20).coerceAtLeast(0)
         val end = (currentIndex + 60).coerceAtMost(queue.size)
         val subQueue = queue.subList(start, end)
@@ -114,6 +128,7 @@ class SettingsRepository(private val context: Context) {
             prefs[KEY_SAVED_QUEUE] = encoded
             prefs[KEY_SAVED_INDEX] = adjustedIndex
             prefs[KEY_SAVED_POSITION] = positionMs.coerceAtLeast(0L)
+            prefs[KEY_SAVED_IS_TASTE_WAVE] = isTasteWave
         }
     }
 
@@ -134,6 +149,14 @@ class SettingsRepository(private val context: Context) {
             val tracks = json.decodeFromString<List<SavedTrackDto>>(encoded).map { it.toTrack() }
             if (tracks.isEmpty() || idx !in tracks.indices) return null
             SavedPlaybackSnapshot(queue = tracks, currentIndex = idx, positionMs = pos)
+
+            val isTasteWave = prefs[KEY_SAVED_IS_TASTE_WAVE] ?: false
+            SavedPlaybackSnapshot(
+                queue = tracks,
+                currentIndex = idx,
+                positionMs = pos,
+                isTasteWave = isTasteWave
+            )
         } catch (_: Exception) {
             null
         }
@@ -141,6 +164,7 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun clearPlaybackSnapshot() {
         dataStore.edit { prefs ->
+            prefs.remove(KEY_SAVED_IS_TASTE_WAVE)
             prefs.remove(KEY_SAVED_QUEUE)
             prefs.remove(KEY_SAVED_INDEX)
             prefs.remove(KEY_SAVED_POSITION)

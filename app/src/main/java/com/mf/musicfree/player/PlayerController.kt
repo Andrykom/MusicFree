@@ -17,6 +17,11 @@ import com.mf.musicfree.data.model.Track
 import kotlinx.coroutines.*
 import kotlin.math.cos
 import kotlin.math.sin
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.extractor.DefaultExtractorsFactory
 
 class PlayerController(private val context: Context) {
     private var activePlayer: ExoPlayer? = null
@@ -27,6 +32,8 @@ class PlayerController(private val context: Context) {
 
     private var onTrackChange: ((Int) -> Unit)? = null
     private var onIsPlayingChange: ((Boolean) -> Unit)? = null
+
+    private var onBufferingChange: ((Boolean) -> Unit)? = null
     private var onPlayerError: ((PlaybackException) -> Unit)? = null
     private var onQueueChange: ((List<Track>) -> Unit)? = null
     private var onActivePlayerChanged: ((ExoPlayer) -> Unit)? = null
@@ -52,6 +59,8 @@ class PlayerController(private val context: Context) {
         .setUsage(C.USAGE_MEDIA)
         .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
         .build()
+
+    val spectrumMonitor = AudioSpectrumMonitor()
 
     companion object {
         private const val STALE_PLAYER_THRESHOLD_MS = 3 * 60_000L
@@ -83,6 +92,7 @@ class PlayerController(private val context: Context) {
         }
         if (onIsPlayingChange != null) {
             onIsPlayingChange?.invoke(player.isPlaying)
+            onBufferingChange?.invoke(player.playbackState == Player.STATE_BUFFERING)
         }
         onQueueChange?.invoke(trackQueue)
     }
@@ -112,8 +122,13 @@ class PlayerController(private val context: Context) {
                 }
             }
 
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                onBufferingChange?.invoke(playbackState == Player.STATE_BUFFERING)
+            }
+
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (!isPlaying) {
+                    spectrumMonitor.reset()
                     lastPauseTimestampMs = System.currentTimeMillis()
                     if (trackQueue.isNotEmpty()) {
                         pendingStartIndex = player.currentMediaItemIndex.coerceIn(0, trackQueue.lastIndex)
@@ -178,8 +193,28 @@ class PlayerController(private val context: Context) {
         } catch (_: Exception) {}
     }
 
+    @OptIn(UnstableApi::class)
     private fun buildNewExoPlayer(handleAudioFocus: Boolean): ExoPlayer {
-        return ExoPlayer.Builder(context)
+        val extractorsFactory = DefaultExtractorsFactory()
+            .setConstantBitrateSeekingEnabled(true)
+            .setConstantBitrateSeekingAlwaysEnabled(true)
+        val mediaSourceFactory = DefaultMediaSourceFactory(context, extractorsFactory)
+
+        val renderersFactory = object : DefaultRenderersFactory(context) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean
+            ): AudioSink {
+                return DefaultAudioSink.Builder(context)
+                    .setEnableFloatOutput(enableFloatOutput)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                    .setAudioProcessors(arrayOf(AudioSpectrumProcessor(spectrumMonitor)))
+                    .build()
+            }
+        }
+        return ExoPlayer.Builder(context, renderersFactory)
+            .setMediaSourceFactory(mediaSourceFactory)
             .setAudioAttributes(musicAudioAttributes, handleAudioFocus)
             .setHandleAudioBecomingNoisy(handleAudioFocus)
             .setWakeMode(C.WAKE_MODE_NETWORK)
@@ -741,4 +776,7 @@ class PlayerController(private val context: Context) {
     fun setSavedIsRadioMode(enabled: Boolean) {
         savedIsRadioMode = enabled
     }
+
+    fun setOnBufferingChangeListener(listener: (Boolean) -> Unit) { onBufferingChange = listener }
+    fun isBuffering(): Boolean = activePlayer?.playbackState == Player.STATE_BUFFERING
 }
