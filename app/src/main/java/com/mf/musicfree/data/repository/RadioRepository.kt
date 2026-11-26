@@ -10,13 +10,12 @@ import com.mf.musicfree.data.model.Track
 import com.mf.musicfree.data.preferences.BlockedArtistsRepository
 import com.mf.musicfree.data.preferences.TasteProfileRepository
 import com.mf.musicfree.plugin.PluginManager
-import com.mf.musicfree.plugin.SearchTrack
 import com.mf.musicfree.plugin.SourcePlugin
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 
 class RadioRepository(
     private val deezerRadioApi: DeezerRadioApi,
@@ -51,8 +50,14 @@ class RadioRepository(
                         val searchResults = withTimeoutOrNull(6_000) { plugin.search(artistName) }
                         if (!searchResults.isNullOrEmpty()) {
                             tracks = searchResults
-                                .filter { it.artist.isNotBlank() && it.artist != "Unknown" }
+                                .filter {
+                                    it.artist.isNotBlank() &&
+                                            it.artist != "Unknown" &&
+                                            !it.artist.equals("Популярные песни", ignoreCase = true)
+                                }
                                 .map { DeezerRadioTrack(title = it.title, artist = DeezerArtist(0L, it.artist)) }
+                                .shuffled()
+                                .take(2) // не даём фолбэку забить очередь одним артистом
                             if (tracks.isNotEmpty()) break
                         }
                     } catch (_: Exception) {}
@@ -70,12 +75,14 @@ class RadioRepository(
 
             // Применяем локальные веса вкуса: штрафуем часто скипаемых, поднимаем любимых + сохраняем элемент случайности
             val weights = tasteProfileRepository.getWeights()
-            filtered
+            val ranked = filtered
                 .filter { (weights[normalize(it.artist.name)] ?: 0f) > -4f }
                 .sortedByDescending { seed ->
                     val w = weights[normalize(seed.artist.name)] ?: 0f
                     w * 0.4f + kotlin.random.Random.nextFloat() * 3.5f
                 }
+
+            spreadByArtist(ranked, maxPerArtist = 2)
         } catch (_: Exception) {
             emptyList()
         }
@@ -117,13 +124,15 @@ class RadioRepository(
             async { getSeeds(artist) }
         }.awaitAll().flatten()
 
-        allSeeds
+        val ranked = allSeeds
             .distinctBy { normalize("${it.artist.name} ${it.title}") }
             .filter { normalize("${it.artist.name} ${it.title}") !in libraryKeys }
             .sortedByDescending { seed ->
                 val w = weights[normalize(seed.artist.name)] ?: 0f
                 w * 0.4f + kotlin.random.Random.nextFloat() * 4.0f
             }
+
+        spreadByArtist(ranked, maxPerArtist = 2)
     }
 
     /** Найти конкретный трек через плагины (строгий отбор для Волны — сомнительные пропускаем) */
@@ -169,6 +178,41 @@ class RadioRepository(
 
         Log.d("RadioRepository", "No strict match found for: '$query' — skipping")
         return null
+    }
+
+    /**
+     * Ограничивает число треков одного исполнителя в пачке и раскладывает их вперемешку (round-robin),
+     * чтобы один артист никогда не шёл подряд.
+     */
+    private fun spreadByArtist(
+        seeds: List<DeezerRadioTrack>,
+        maxPerArtist: Int = 2
+    ): List<DeezerRadioTrack> {
+        val buckets = LinkedHashMap<String, ArrayDeque<DeezerRadioTrack>>()
+        for (seed in seeds) {
+            val key = normalize(
+                seed.artist.name.split(",", ";", "&", "feat.", "ft.", ignoreCase = true).first()
+            )
+            if (key.isBlank()) continue
+            val bucket = buckets.getOrPut(key) { ArrayDeque() }
+            if (bucket.size < maxPerArtist) {
+                bucket.addLast(seed)
+            }
+        }
+        val result = ArrayList<DeezerRadioTrack>(seeds.size)
+        val keys = buckets.keys.toList()
+        var added = true
+        while (added) {
+            added = false
+            for (k in keys) {
+                val item = buckets[k]?.removeFirstOrNull()
+                if (item != null) {
+                    result.add(item)
+                    added = true
+                }
+            }
+        }
+        return result
     }
 
     private fun normalize(s: String): String =

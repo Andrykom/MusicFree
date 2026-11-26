@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import com.mf.musicfree.data.preferences.TasteProfileRepository
 
 enum class RepeatMode { NONE, ALL, ONE }
 
@@ -48,7 +49,8 @@ class PlayerViewModel(
     private val settingsRepository: SettingsRepository? = null,
     private val coverProvider: CoverProvider? = null,
     private val pluginManager: PluginManager? = null,
-    private val downloadManager: com.mf.musicfree.data.download.DownloadManager? = null
+    private val downloadManager: com.mf.musicfree.data.download.DownloadManager? = null,
+    private val tasteProfileRepository: TasteProfileRepository? = null
 ) : ViewModel() {
 
     private val _queue = MutableStateFlow<List<Track>>(emptyList())
@@ -145,7 +147,8 @@ class PlayerViewModel(
     private val _isCurrentArtistBlocked = MutableStateFlow(false)
     val isCurrentArtistBlocked: StateFlow<Boolean> = _isCurrentArtistBlocked
 
-    private val radioBufferSize = 1
+    private val radioBufferSize = 2
+    private var tasteRefillRetries = 0
 
     private var radioSeeds: List<DeezerRadioTrack> = emptyList()
     private var radioSeedIndex = 0
@@ -186,6 +189,14 @@ class PlayerViewModel(
             persistSnapshotAsync(safeIdx, 0L)
             if (_isRadioMode.value) {
                 ensureRadioBuffer()
+            }
+            val prevTrack = _currentTrack.value
+            val prevPos = _currentPosition.value
+            val prevDur = _duration.value
+            if (prevTrack != null && prevDur > 0 && (prevPos >= prevDur * 0.65 || prevPos >= 60_000L)) {
+                viewModelScope.launch {
+                    tasteProfileRepository?.recordCompleteListen(prevTrack.artist)
+                }
             }
         }
 
@@ -460,15 +471,27 @@ class PlayerViewModel(
 
     fun startTasteWave() {
         if (_isTasteWaveActive.value && _isRadioMode.value) {
-            togglePlayPause()
-            if (radioSeeds.isEmpty() && radioLoadJob?.isActive != true) {
+            val atQueueEnd = !playerController.isPlaying() &&
+                    _queue.value.isNotEmpty() &&
+                    _currentIndex.value >= _queue.value.lastIndex &&
+                    _progress.value >= 0.95f
+            if (atQueueEnd) {
+                radioLoadJob?.cancel()
                 radioLoadJob = viewModelScope.launch {
                     runRadioLoader()
+                    if (_currentIndex.value < _queue.value.lastIndex) {
+                        playerController.next()
+                        playerController.play()
+                    }
                 }
+                return
             }
+            togglePlayPause()
+            ensureRadioBuffer()
             return
         }
         stopRadio()
+        tasteRefillRetries = 0
         _isRadioBuffering.value = true
         radioLoadJob = viewModelScope.launch {
             val libraryTracks = trackRepository.getAllTracks().first()
@@ -502,7 +525,7 @@ class PlayerViewModel(
             }
 
             // Запускаем первый трек (при _isRadioMode == false, чтобы playFromQueue не перезапустил обычное радио)
-            playFromQueue(listOf(firstTrack), 0)
+            playFromQueue(listOf(firstTrack), 0, keepTasteWave = true)
             radioQueuedIds.add(firstTrack.id)
             _isTasteWaveActive.value = true
             _isRadioMode.value = true
@@ -613,6 +636,20 @@ class PlayerViewModel(
         }
     }
 
+    private fun primaryArtistKey(artist: String): String =
+        artist.split(",", ";", "&", "feat.", "ft.", " x ", ignoreCase = true)
+            .first()
+            .lowercase()
+            .replace('ё', 'е')
+            .trim()
+
+    private fun isArtistOnCooldown(artist: String, windowSize: Int = 5): Boolean {
+        val key = primaryArtistKey(artist)
+        if (key.isBlank()) return false
+        val recent = _queue.value.takeLast(windowSize)
+        return recent.any { primaryArtistKey(it.artist) == key }
+    }
+
     private suspend fun runRadioLoader() {
         if (radioTracksAhead() == 0) {
             _isRadioBuffering.value = true
@@ -626,16 +663,22 @@ class PlayerViewModel(
                 }
 
                 val seed = radioSeeds[radioSeedIndex++]
+                // Кулдаун до сетевого запроса: экономит время и не даёт артисту повторяться чаще раза в 5 треков
+                if (isArtistOnCooldown(seed.artist.name, windowSize = 5)) continue
+
                 val track = try {
                     radioRepository.findTrack(seed.artist.name, seed.title)
                 } catch (_: Exception) { null }
 
                 val duplicate = track == null ||
                         track.id in radioQueuedIds ||
-                        track.id == _currentTrack.value?.id
+                        track.id == _currentTrack.value?.id ||
+                        isArtistOnCooldown(track.artist, windowSize = 5)
+
                 if (track != null && !duplicate) {
                     addRadioTrack(track)
                     addedSinceRefill++
+                    tasteRefillRetries = 0
                     _isRadioBuffering.value = false
                 }
             }
@@ -646,13 +689,20 @@ class PlayerViewModel(
 
     private suspend fun refillSeeds(addedSinceRefill: Int): Boolean {
         if (addedSinceRefill == 0) {
-            _isRadioMode.value = false
-            playerController.setSavedIsRadioMode(false)
-            _playbackErrorEvent.tryEmit("Волна завершена: новые треки не найдены")
-            return false
+            // Для Волны по вкусу делаем до 2 повторных попыток с новой случайной выборкой артистов
+            if (_isTasteWaveActive.value && tasteRefillRetries < 2) {
+                tasteRefillRetries++
+            } else {
+                _isRadioMode.value = false
+                _isTasteWaveActive.value = false
+                playerController.setSavedIsRadioMode(false)
+                _playbackErrorEvent.tryEmit("Волна завершена: новые треки не найдены")
+                return false
+            }
         }
         val sourceArtist = _currentTrack.value?.artist ?: run {
             _isRadioMode.value = false
+            _isTasteWaveActive.value = false
             playerController.setSavedIsRadioMode(false)
             return false
         }
@@ -665,6 +715,7 @@ class PlayerViewModel(
         radioSeedIndex = 0
         if (newSeeds.isEmpty()) {
             _isRadioMode.value = false
+            _isTasteWaveActive.value = false
             playerController.setSavedIsRadioMode(false)
             _playbackErrorEvent.tryEmit("Волна завершена: новые треки не найдены")
             return false
@@ -886,6 +937,12 @@ class PlayerViewModel(
         val now = System.currentTimeMillis()
         if (now - lastNavMs < 200) return
         lastNavMs = now
+        val cur = _currentTrack.value
+        if (cur != null && _isRadioMode.value && _currentPosition.value < 20_000L) {
+            viewModelScope.launch {
+                tasteProfileRepository?.recordQuickSkip(cur.artist)
+            }
+        }
         playerController.next()
     }
 
@@ -980,6 +1037,7 @@ class PlayerViewModel(
                 _playbackErrorEvent.tryEmit("«${track.title}» удален из Моей музыки")
             } else {
                 trackRepository.ensureTrackExists(track)
+                tasteProfileRepository?.recordLike(track.artist)
                 _playbackErrorEvent.tryEmit("«${track.title}» добавлен в Мою музыку")
             }
         }
